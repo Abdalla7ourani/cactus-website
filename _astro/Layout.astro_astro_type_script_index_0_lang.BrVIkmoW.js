@@ -1,0 +1,1 @@
+import{a as t}from"./animation.D7VHS8Cu.js";import{i as o}from"./lenis.BseDuCCl.js";import"./gsap.DWdbvLsL.js";import"./index.DKtf60Sy.js";import"./SplitText.Cpc1cBKW.js";import"./utils.DOJD42sm.js";document.addEventListener("DOMContentLoaded",o);document.fonts.ready.then(t);

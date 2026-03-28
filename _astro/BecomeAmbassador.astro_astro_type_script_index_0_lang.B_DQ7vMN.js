@@ -1,0 +1,1 @@
+import"./gsap.DWdbvLsL.js";import{g as o}from"./index.DKtf60Sy.js";const i=document.querySelectorAll(".step-card");let t;const s=()=>{t=o.timeline({scrollTrigger:{trigger:"#become-ambassador",endTrigger:"#steps",start:"top bottom",end:"bottom bottom",scrub:!0}}),i.forEach((r,e)=>{t.from(r,{yPercent:100*e},"<")})};window.innerWidth>1024&&s();

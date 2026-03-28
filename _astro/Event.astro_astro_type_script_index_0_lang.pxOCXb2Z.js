@@ -1,0 +1,1 @@
+import"./gsap.DWdbvLsL.js";import{g as r}from"./index.DKtf60Sy.js";const i=document.querySelectorAll(".question-card");let t;const n=()=>{t=r.timeline({scrollTrigger:{trigger:"#event",endTrigger:"#questions",start:"top bottom",end:"bottom bottom",scrub:!0}}),i.forEach((o,e)=>{t.from(o,{yPercent:100*e},"<")})};window.innerWidth>1024&&n();

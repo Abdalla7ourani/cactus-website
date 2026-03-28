@@ -1,0 +1,1 @@
+import"./gsap.DWdbvLsL.js";import{g as t}from"./index.DKtf60Sy.js";const n=document.getElementById("grants-inner-top"),e=document.getElementById("grants-inner-bottom"),o=()=>{t.timeline({scrollTrigger:{trigger:e,start:"top-=64 bottom",end:"top top",scrub:!0}}).to(n,{yPercent:35,ease:"power1.in"})};window.innerWidth>1024&&o();

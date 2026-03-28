@@ -1,0 +1,31 @@
+# Temporary Python scripts (one-time tools)
+_*.py
+
+# Temporary PowerShell scripts
+_*.ps1
+_*.cs
+
+# Temporary files
+_logo_base64.txt
+
+# Intermediate/aligned logo variants (originals are kept)
+cactus-logo-black-aligned.png
+cactus-logo-color-aligned.png
+cactus-logo-black-cropped.png
+cactus-logo-color-cropped.png
+cactus-logo-color-padded.png
+cactus-logo-cropped-transparent.png
+
+# External proxy folders (HTTrack artifacts, not needed for site)
+app.termly.io/
+images.ctfassets.net/
+js.hs-scripts.com/
+platform.twitter.com/
+
+# OS files
+Thumbs.db
+Desktop.ini
+.DS_Store
+
+# Editor
+.cursor/
