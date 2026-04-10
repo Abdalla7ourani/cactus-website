@@ -322,6 +322,8 @@ var final="WEBSITES CREATED BY US FOR BUSINESSES WORLDWIDE";
 var chars=final.split("");
 var currentIndex=0;
 var scrambleFrames=3;
+el.textContent=final;
+el.style.minHeight=el.offsetHeight+"px";
 function rand(){return Math.random()<0.5?"0":"1"}
 function render(){
 var out="";
@@ -338,7 +340,7 @@ intervalId=setInterval(render,30);
 decryptNext();
 }
 function decryptNext(){
-if(currentIndex>=chars.length){clearInterval(intervalId);render();return}
+if(currentIndex>=chars.length){clearInterval(intervalId);render();el.style.minHeight="";return}
 if(chars[currentIndex]===" "){currentIndex++;decryptNext();return}
 var frames=0;
 function tick(){
