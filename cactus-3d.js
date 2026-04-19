@@ -27,7 +27,7 @@ import * as THREE from "https://cdn.jsdelivr.net/npm/three@0.162.0/build/three.m
   });
   ren.setPixelRatio(Math.min(devicePixelRatio, 1.75));
   ren.toneMapping = THREE.ACESFilmicToneMapping;
-  ren.toneMappingExposure = 1.05;
+  ren.toneMappingExposure = 0.78;
   ren.outputColorSpace = THREE.SRGBColorSpace;
   ren.setClearColor(0x000000, 0);
 
@@ -38,15 +38,15 @@ import * as THREE from "https://cdn.jsdelivr.net/npm/three@0.162.0/build/three.m
   var cam = new THREE.PerspectiveCamera(40, 1, 0.1, 50);
   cam.position.z = 5;
 
-  scene.add(new THREE.HemisphereLight(0xfff2dd, 0x1a3310, 0.75));
-  var kL = new THREE.DirectionalLight(0xffe8c0, 1.7);
+  scene.add(new THREE.HemisphereLight(0xfff2dd, 0x1a3310, 0.40));
+  var kL = new THREE.DirectionalLight(0xffe8c0, 1.05);
   kL.position.set(3, 5, 6); scene.add(kL);
-  var fL = new THREE.DirectionalLight(0xc8d8ff, 0.55);
+  var fL = new THREE.DirectionalLight(0xc8d8ff, 0.30);
   fL.position.set(-4, -1, 3); scene.add(fL);
-  var rL = new THREE.DirectionalLight(0xffd8a0, 0.35);
+  var rL = new THREE.DirectionalLight(0xffd8a0, 0.20);
   rL.position.set(0, -3, -4); scene.add(rL);
-  /* Rim light kissing the back so spines catch the light. */
-  var rimL = new THREE.DirectionalLight(0xfff0d0, 0.85);
+  /* Subtle back rim — just enough to separate spines from the body. */
+  var rimL = new THREE.DirectionalLight(0xfff0d0, 0.40);
   rimL.position.set(-2, 4, -5); scene.add(rimL);
 
   /* ================================================================== */
@@ -61,34 +61,34 @@ import * as THREE from "https://cdn.jsdelivr.net/npm/three@0.162.0/build/three.m
     var ctx = c.getContext("2d");
     /* Vertical gradient: top (sky) → middle (peach/pink/mint) → bottom (warm) */
     var v = ctx.createLinearGradient(0, 0, 0, H);
-    v.addColorStop(0.00, "#cdd9ff");
-    v.addColorStop(0.18, "#dec9ff");
-    v.addColorStop(0.36, "#f6c9e2");
-    v.addColorStop(0.52, "#fad6c4");
-    v.addColorStop(0.70, "#f9e2c5");
-    v.addColorStop(0.85, "#cfe9d6");
-    v.addColorStop(1.00, "#a8d4d8");
+    v.addColorStop(0.00, "#a8c0ff");
+    v.addColorStop(0.18, "#c8a8ff");
+    v.addColorStop(0.36, "#ffb0d4");
+    v.addColorStop(0.52, "#ffc0a0");
+    v.addColorStop(0.70, "#fde08c");
+    v.addColorStop(0.85, "#a8e8c0");
+    v.addColorStop(1.00, "#80c0d8");
     ctx.fillStyle = v;
     ctx.fillRect(0, 0, W, H);
     /* Horizontal hue wash to add iridescent rainbow streaks */
     var h = ctx.createLinearGradient(0, 0, W, 0);
-    h.addColorStop(0.00, "rgba(255,150,200,0.45)");
-    h.addColorStop(0.20, "rgba(180,200,255,0.35)");
-    h.addColorStop(0.40, "rgba(255,210,170,0.40)");
-    h.addColorStop(0.60, "rgba(190,255,220,0.35)");
-    h.addColorStop(0.80, "rgba(220,180,255,0.40)");
-    h.addColorStop(1.00, "rgba(255,170,210,0.45)");
+    h.addColorStop(0.00, "rgba(255,120,180,0.55)");
+    h.addColorStop(0.20, "rgba(140,170,255,0.50)");
+    h.addColorStop(0.40, "rgba(255,180,120,0.55)");
+    h.addColorStop(0.60, "rgba(150,255,200,0.50)");
+    h.addColorStop(0.80, "rgba(200,150,255,0.55)");
+    h.addColorStop(1.00, "rgba(255,140,200,0.55)");
     ctx.globalCompositeOperation = "screen";
     ctx.fillStyle = h;
     ctx.fillRect(0, 0, W, H);
     /* Soft blob highlights for the wavy iridescent effect */
     ctx.globalCompositeOperation = "lighter";
     var blobs = [
-      [0.20, 0.30, 0.32, "rgba(255,200,230,0.55)"],
-      [0.55, 0.40, 0.38, "rgba(220,235,255,0.55)"],
-      [0.78, 0.55, 0.32, "rgba(255,225,200,0.55)"],
-      [0.35, 0.70, 0.38, "rgba(210,255,225,0.50)"],
-      [0.85, 0.85, 0.30, "rgba(255,210,235,0.45)"],
+      [0.20, 0.30, 0.32, "rgba(255,180,220,0.65)"],
+      [0.55, 0.40, 0.38, "rgba(200,225,255,0.65)"],
+      [0.78, 0.55, 0.32, "rgba(255,210,170,0.65)"],
+      [0.35, 0.70, 0.38, "rgba(190,255,210,0.60)"],
+      [0.85, 0.85, 0.30, "rgba(255,190,230,0.55)"],
     ];
     for (var bi = 0; bi < blobs.length; bi++) {
       var bx = blobs[bi][0] * W, by = blobs[bi][1] * H;
@@ -190,10 +190,10 @@ import * as THREE from "https://cdn.jsdelivr.net/npm/three@0.162.0/build/three.m
     var mat = new THREE.MeshStandardMaterial({
       color: tipColor != null ? 0xffffff : color,
       vertexColors: tipColor != null,
-      roughness: 0.30, metalness: 0.20,
+      roughness: 0.40, metalness: 0.10,
       transparent: true, depthWrite: true,
     });
-    mat.envMapIntensity = 0.40;
+    mat.envMapIntensity = 0.55;
 
     var maxRad = rCount + 4;
     var max = areoles.length * (maxRad + 1);
@@ -322,17 +322,18 @@ import * as THREE from "https://cdn.jsdelivr.net/npm/three@0.162.0/build/three.m
   function cactusSkinMaterial(opts) {
     var m = new THREE.MeshPhysicalMaterial({
       vertexColors: true,
-      roughness: opts.roughness != null ? opts.roughness : 0.55,
-      metalness: 0.02,
-      clearcoat: opts.clearcoat != null ? opts.clearcoat : 0.45,
-      clearcoatRoughness: opts.clearcoatRoughness != null ? opts.clearcoatRoughness : 0.35,
+      roughness: opts.roughness != null ? opts.roughness : 0.65,
+      metalness: 0.0,
+      clearcoat: opts.clearcoat != null ? opts.clearcoat : 0.85,
+      /* Clearcoat must be near-glossy for the env map to read as visible
+         iridescent color rather than a blurred grey tint. */
+      clearcoatRoughness: opts.clearcoatRoughness != null ? opts.clearcoatRoughness : 0.10,
       sheen: opts.sheen || 0.0,
       sheenRoughness: 0.6,
       sheenColor: new THREE.Color(opts.sheenColor || 0x335522),
       transparent: true, depthWrite: true,
     });
-    /* Skin reflects the iridescent env subtly; clearcoat layer reflects more */
-    m.envMapIntensity = opts.envMapIntensity != null ? opts.envMapIntensity : 0.55;
+    m.envMapIntensity = opts.envMapIntensity != null ? opts.envMapIntensity : 1.20;
     return m;
   }
 
@@ -420,7 +421,7 @@ import * as THREE from "https://cdn.jsdelivr.net/npm/three@0.162.0/build/three.m
     tube.computeVertexNormals();
 
     var mesh = new THREE.Mesh(tube, cactusSkinMaterial({
-      roughness: 0.42, clearcoat: 0.55, clearcoatRoughness: 0.32,
+      roughness: 0.62, clearcoat: 0.85, clearcoatRoughness: 0.10,
       sheen: 0.30, sheenColor: 0x445533,
     }));
 
@@ -552,7 +553,7 @@ import * as THREE from "https://cdn.jsdelivr.net/npm/three@0.162.0/build/three.m
     });
 
     g.add(new THREE.Mesh(geo, cactusSkinMaterial({
-      roughness: 0.45, clearcoat: 0.50, clearcoatRoughness: 0.32,
+      roughness: 0.62, clearcoat: 0.85, clearcoatRoughness: 0.10,
       sheen: 0.35, sheenColor: 0x445533,
     })));
     makeSpines(g, ribAreoles(RC, 9, R, RD, YS, 0.4), 0xd9a838, 0.060, 0.040, 0.0028, 5, 0.012, 0xfff0c0);
@@ -638,7 +639,7 @@ import * as THREE from "https://cdn.jsdelivr.net/npm/three@0.162.0/build/three.m
   function buildPear() {
     var g = new THREE.Group();
     var padMat = cactusSkinMaterial({
-      roughness: 0.45, clearcoat: 0.55, clearcoatRoughness: 0.30,
+      roughness: 0.62, clearcoat: 0.85, clearcoatRoughness: 0.10,
       sheen: 0.30, sheenColor: 0x335522,
     });
     var pad1G = makePad(0.30, 1.45, 0.16);
@@ -709,7 +710,7 @@ import * as THREE from "https://cdn.jsdelivr.net/npm/three@0.162.0/build/three.m
     });
 
     g.add(new THREE.Mesh(geo, cactusSkinMaterial({
-      roughness: 0.40, clearcoat: 0.55, clearcoatRoughness: 0.28,
+      roughness: 0.58, clearcoat: 0.90, clearcoatRoughness: 0.08,
       sheen: 0.40, sheenColor: 0x335522,
     })));
     makeSpines(g, ribAreoles(RC, 9, R, RD, HX, 0.35), 0xb84a14, 0.110, 0.075, 0.0036, 6, 0.013, 0xff8a40);
@@ -754,7 +755,7 @@ import * as THREE from "https://cdn.jsdelivr.net/npm/three@0.162.0/build/three.m
     geo.setAttribute("color", new THREE.BufferAttribute(vc, 3));
     geo.computeVertexNormals();
     g.add(new THREE.Mesh(geo, cactusSkinMaterial({
-      roughness: 0.45, clearcoat: 0.55, clearcoatRoughness: 0.30,
+      roughness: 0.62, clearcoat: 0.85, clearcoatRoughness: 0.10,
       sheen: 0.30, sheenColor: 0x224422,
     })));
     var areoles = [];
@@ -833,7 +834,7 @@ import * as THREE from "https://cdn.jsdelivr.net/npm/three@0.162.0/build/three.m
       hf: function (x, y, z) { return (y / (R * HX) + 1) * 0.5; },
     });
     g.add(new THREE.Mesh(geo, cactusSkinMaterial({
-      roughness: 0.50, clearcoat: 0.50, clearcoatRoughness: 0.32,
+      roughness: 0.65, clearcoat: 0.85, clearcoatRoughness: 0.12,
     })));
 
     /* Astrophytum white flecks scattered across the body */
