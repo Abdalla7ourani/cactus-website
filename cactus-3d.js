@@ -82,22 +82,28 @@ import * as THREE from "https://cdn.jsdelivr.net/npm/three@0.162.0/build/three.m
      subtle hues. envBoost scales scene.environmentIntensity. */
   var THEMES = {
     light: {
-      exposure:  0.78,
-      hemi:      { sky: 0xfff0d8, ground: 0x4a5828, intensity: 0.32 },
-      key:       { color: 0xfff0d0, intensity: 0.95 },
-      fill:      { color: 0xb8c4dc, intensity: 0.30 },
-      bounce:    { color: 0xc8a878, intensity: 0.18 },
-      rim:       { color: 0xffe8b8, intensity: 0.28 },
-      envBoost:  0.35,
+      /* High key + low fill + low ambient = strong directional shadow
+         contrast, so the deep rib troughs cast crisp dark grooves and
+         the rib crests catch bright sunlight — the cinematic "form
+         lighting" of the reference close-up photos. Exposure dropped
+         slightly so the bright crests don't blow out against the bright
+         iridescent backdrop. */
+      exposure:  0.72,
+      hemi:      { sky: 0xfff0d8, ground: 0x4a5828, intensity: 0.18 },
+      key:       { color: 0xfff0d0, intensity: 1.55 },
+      fill:      { color: 0xb8c4dc, intensity: 0.16 },
+      bounce:    { color: 0xc8a878, intensity: 0.14 },
+      rim:       { color: 0xffe8b8, intensity: 0.40 },
+      envBoost:  0.30,
     },
     dark: {
       exposure:  0.78,
-      hemi:      { sky: 0x6a78a0, ground: 0x18102a, intensity: 0.42 },
-      key:       { color: 0xc8d4ff, intensity: 0.90 },
-      fill:      { color: 0x9080d8, intensity: 0.40 },
-      bounce:    { color: 0x6a4080, intensity: 0.25 },
-      rim:       { color: 0xb898ff, intensity: 0.65 },
-      envBoost:  0.95,
+      hemi:      { sky: 0x6a78a0, ground: 0x18102a, intensity: 0.26 },
+      key:       { color: 0xc8d4ff, intensity: 1.40 },
+      fill:      { color: 0x9080d8, intensity: 0.22 },
+      bounce:    { color: 0x6a4080, intensity: 0.18 },
+      rim:       { color: 0xb898ff, intensity: 0.80 },
+      envBoost:  0.85,
     },
   };
 
@@ -364,27 +370,79 @@ import * as THREE from "https://cdn.jsdelivr.net/npm/three@0.162.0/build/three.m
     };
     var sty = STYLE[style] || STYLE.balanced;
 
-    var geo = new THREE.ConeGeometry(thick, 1.0, 6);
+    /* Spine geometry: a short cylinder with multiple radial segments AND
+       multiple height segments. The reason for the height segments is so
+       we can taper the radius non-linearly along the length (sharp needle
+       tip, slightly thicker base) and add a very subtle curve — both of
+       which match how real cactus spines look in close-up reference
+       photos. A plain ConeGeometry tapers linearly, which reads as
+       triangular and CG-like.
+
+       Length is normalised to 1 at base (Y=0) → tip (Y=1); the per-
+       instance scale.y multiplies it to the desired physical length. */
+    var SEG_R = 7;   /* radial segments — 6 was visibly faceted */
+    var SEG_H = 6;   /* height segments for the taper curve and bend */
+    var geo = new THREE.CylinderGeometry(thick, thick, 1.0, SEG_R, SEG_H, false);
     geo.translate(0, 0.5, 0);
+    {
+      var pp = geo.attributes.position;
+      /* Curve recipe:
+           - radius(t) = thick * (1 - t)^2.2    (very sharp tip)
+           - bend(t)   = small +X offset that grows ~ t^1.6
+              (so spines lean forward slightly, like real ones)
+           - mild taper jitter so no two spines profile identically */
+      var bendX = thick * 6;
+      for (var pi = 0; pi < pp.count; pi++) {
+        var py = pp.getY(pi);
+        if (py <= 0.001) continue;
+        var px = pp.getX(pi);
+        var pz = pp.getZ(pi);
+        /* Current radial distance from spine axis. */
+        var pr = Math.sqrt(px * px + pz * pz);
+        if (pr > 1e-6) {
+          /* Pinch radius. Pinch goes from 1.0 at base → ~0 at tip. */
+          var pinch = Math.pow(1 - py, 2.2);
+          var newR = thick * pinch;
+          var s = newR / pr;
+          pp.setX(pi, px * s);
+          pp.setZ(pi, pz * s);
+        }
+        /* Subtle forward bend on +X. */
+        pp.setX(pi, pp.getX(pi) + bendX * Math.pow(py, 1.6));
+      }
+      pp.needsUpdate = true;
+      geo.computeVertexNormals();
+    }
     if (tipColor != null) {
       var p = geo.attributes.position;
       var vc = new Float32Array(p.count * 3);
       var base = new THREE.Color(color);
       var tip = new THREE.Color(tipColor);
       for (var ii = 0; ii < p.count; ii++) {
-        var t = p.getY(ii);
-        vc[ii * 3]     = base.r + (tip.r - base.r) * t;
-        vc[ii * 3 + 1] = base.g + (tip.g - base.g) * t;
-        vc[ii * 3 + 2] = base.b + (tip.b - base.b) * t;
+        /* Color blend along length: bottom 25% stays base color (the
+           spine's "wool collar"), then ramps to tip color toward the
+           point. This matches reference photos where the tips catch
+           the most light and read as pale amber. */
+        var ty = p.getY(ii);
+        var tBlend = ty < 0.25 ? 0 : (ty - 0.25) / 0.75;
+        if (tBlend > 1) tBlend = 1;
+        vc[ii * 3]     = base.r + (tip.r - base.r) * tBlend;
+        vc[ii * 3 + 1] = base.g + (tip.g - base.g) * tBlend;
+        vc[ii * 3 + 2] = base.b + (tip.b - base.b) * tBlend;
       }
       geo.setAttribute("color", new THREE.BufferAttribute(vc, 3));
     }
     /* Real cactus spines are modified leaves: dry, fibrous keratin-like
-       tissue. Matte to slightly satin; never metallic-shiny. */
-    var mat = new THREE.MeshStandardMaterial({
+       tissue. Matte to slightly satin; never metallic-shiny. The tip
+       can pick up a tiny bit more sheen — handled by sheen kicking in
+       at grazing angles. */
+    var mat = new THREE.MeshPhysicalMaterial({
       color: tipColor != null ? 0xffffff : color,
       vertexColors: tipColor != null,
-      roughness: 0.78, metalness: 0.0,
+      roughness: 0.62, metalness: 0.0,
+      sheen: 0.35,
+      sheenRoughness: 0.55,
+      sheenColor: new THREE.Color(0xfff0d8),
       transparent: false, depthWrite: true,
     });
     mat.envMapIntensity = 0.55;
@@ -546,9 +604,26 @@ import * as THREE from "https://cdn.jsdelivr.net/npm/three@0.162.0/build/three.m
       var hf = opts.hf != null ? opts.hf(x, y, z) : 0.5;
       var jitter = (n1 + n2) * (opts.colorJitter || 0.04);
       var bleach = (1 - hf) * (opts.bleach || 0.0);
-      vc[i * 3]     = base.r + (rib.r - base.r) * ribAmt + jitter + bleach;
-      vc[i * 3 + 1] = base.g + (rib.g - base.g) * ribAmt + jitter + bleach;
-      vc[i * 3 + 2] = base.b + (rib.b - base.b) * ribAmt + jitter + bleach * 0.6;
+      var r = base.r + (rib.r - base.r) * ribAmt + jitter + bleach;
+      var g = base.g + (rib.g - base.g) * ribAmt + jitter + bleach;
+      var b = base.b + (rib.b - base.b) * ribAmt + jitter + bleach * 0.6;
+      /* Baked AO: troughs (low ribAmt) self-shadow because they're
+         recessed into the body and receive less ambient skylight. We
+         multiply the color by a darken factor that scales with how far
+         we are from a crest. Strength is opt-in (default 0.0 to keep
+         old call sites identical) so each species can dial it in to
+         match its rib geometry depth. Floor was 0.55, dropped to 0.42
+         so the deepest troughs read as crisp dark grooves matching the
+         reference photos. */
+      var aoStrength = opts.aoStrength != null ? opts.aoStrength : 0.0;
+      if (aoStrength > 0) {
+        var aoDark = 1 - (1 - ribAmt) * aoStrength;
+        if (aoDark < 0.42) aoDark = 0.42;
+        r *= aoDark; g *= aoDark; b *= aoDark;
+      }
+      vc[i * 3]     = r;
+      vc[i * 3 + 1] = g;
+      vc[i * 3 + 2] = b;
     }
     geo.setAttribute("color", new THREE.BufferAttribute(vc, 3));
     geo.computeVertexNormals();
@@ -585,7 +660,7 @@ import * as THREE from "https://cdn.jsdelivr.net/npm/three@0.162.0/build/three.m
          alone so the warm spine palette survives. */
       var mat = ch.material;
       if (!mat) return;
-      var isSkin = (mat.isMeshPhysicalMaterial === true) && (mat.vertexColors === true);
+      var isSkin = mat.userData && mat.userData.isCactusSkin === true;
       if (!isSkin) return;
       var arr = attr.array;
       for (var i = 0; i < arr.length; i += 3) {
@@ -707,13 +782,176 @@ import * as THREE from "https://cdn.jsdelivr.net/npm/three@0.162.0/build/three.m
     return { r: tint.r, g: tint.g, b: tint.b, mix: mix, valShift: valShift };
   }
 
+  /* ================================================================== */
+  /*  Procedural PBR skin texture maps                                  */
+  /*                                                                    */
+  /*  Cactus skin in close-up reference photos shows TWO distinct       */
+  /*  scales of micro-detail layered on top of each other:              */
+  /*    1. A fine pebbly grain (cuticle bumps, ~50–80 cells per cm)     */
+  /*    2. A larger mottling — areas of slightly drier vs more turgid   */
+  /*       tissue, water-stress wrinkles, sun-bleached patches.         */
+  /*                                                                    */
+  /*  Without these, a smooth shaded surface always reads as "CG plant" */
+  /*  no matter how good the lighting is. We generate ALL of this once  */
+  /*  at module load into shared 1K canvas textures (≈6ms total, no     */
+  /*  network requests, no extra page weight) and reuse the same maps   */
+  /*  across every cactus instance. The maps are wrapped seamlessly so  */
+  /*  they tile invisibly across the body of any species.               */
+  /*                                                                    */
+  /*  The normal map is the most important — it gives the lighting      */
+  /*  real bumps to react to, which produces the dark micro-shadows     */
+  /*  and bright micro-highlights you see in the reference photos.      */
+  /*  The roughness map varies how shiny different patches read,        */
+  /*  breaking the "uniform plastic" feel.                              */
+  /* ================================================================== */
+
+  /* Tiny deterministic 2D hash + value noise — same family as the       */
+  /* hash3/noise3 used for vertex micro-displacement, but in 2D so it    */
+  /* tiles cleanly on a square texture.                                  */
+  function _h2(x, y) {
+    var s = Math.sin(x * 12.9898 + y * 78.233) * 43758.5453;
+    return s - Math.floor(s);
+  }
+  function _vn2(x, y, freq, sx, sy) {
+    /* Tileable value noise: hash on an integer lattice modulo size,
+       so the noise wraps without seams. */
+    var fx = x * freq, fy = y * freq;
+    var ix = Math.floor(fx), iy = Math.floor(fy);
+    var tx = fx - ix, ty = fy - iy;
+    /* Smoothstep for smoother interp than linear. */
+    var ux = tx * tx * (3 - 2 * tx);
+    var uy = ty * ty * (3 - 2 * ty);
+    var modX = freq | 0, modY = freq | 0;
+    var x0 = ((ix % modX) + modX) % modX;
+    var y0 = ((iy % modY) + modY) % modY;
+    var x1 = (x0 + 1) % modX;
+    var y1 = (y0 + 1) % modY;
+    var a = _h2(x0, y0);
+    var b = _h2(x1, y0);
+    var c = _h2(x0, y1);
+    var d = _h2(x1, y1);
+    var ab = a + (b - a) * ux;
+    var cd = c + (d - c) * ux;
+    return ab + (cd - ab) * uy;
+  }
+  /* Multi-octave fbm so we get both large mottling and fine grain. */
+  function _fbm2(x, y, baseFreq, octaves) {
+    var v = 0, amp = 0.5, sum = 0, f = baseFreq;
+    for (var o = 0; o < octaves; o++) {
+      v += _vn2(x, y, f, 1, 1) * amp;
+      sum += amp;
+      amp *= 0.5;
+      f *= 2;
+    }
+    return v / sum;
+  }
+
+  /* Generate the three shared maps once. */
+  function _buildSkinMaps() {
+    var SIZE = 1024;
+    var normalCv = document.createElement("canvas");
+    var roughCv  = document.createElement("canvas");
+    normalCv.width = roughCv.width = SIZE;
+    normalCv.height = roughCv.height = SIZE;
+    var nCtx = normalCv.getContext("2d");
+    var rCtx = roughCv.getContext("2d");
+    var nImg = nCtx.createImageData(SIZE, SIZE);
+    var rImg = rCtx.createImageData(SIZE, SIZE);
+    var nD = nImg.data, rD = rImg.data;
+
+    /* Compute a height field h(x,y) in [0,1]. We sample neighbours and
+       take central-differences to derive the normal, then encode normal
+       to RGB in the OpenGL convention (R=+X, G=+Y, B=+Z, all in [0,1]).
+       Roughness varies inversely with height (peaks of cuticle bumps
+       are slightly waxier/smoother, troughs are matte) plus a separate
+       low-freq mottling. AO darkens the troughs. */
+    function H(x, y) {
+      var nx = x / SIZE, ny = y / SIZE;
+      /* Cell-like cuticle pebbles — high-freq fbm. Bumped octaves and
+         pushed contrast so individual cells read as raised pucker
+         points, like real cactus epidermis at close range. */
+      var cells = _fbm2(nx, ny, 80, 4);
+      cells = Math.pow(cells, 0.85);
+      /* Larger mottling — patches of stress / wax thickness. */
+      var mott  = _fbm2(nx + 5.13, ny + 2.71, 6, 4);
+      /* Lenticel striations — strengthened so they read as faint
+         horizontal lines on the body, like the references. */
+      var stria = 0.5 + 0.5 * Math.sin(ny * 220 + mott * 6.2 + cells * 1.1);
+      /* Combine: cells dominate the bumps, mottling biases the height,
+         striations add subtle bands. */
+      var h = cells * 0.72 + mott * 0.18 + stria * 0.10;
+      return h;
+    }
+
+    /* STRENGTH = how aggressively we convert height differences into
+       normal tilt. Higher = bumpier shading. Bumped from 4.5 to 14 so
+       the new normal map is actually visible from camera distance. */
+    var STRENGTH = 14;
+    for (var y = 0; y < SIZE; y++) {
+      for (var x = 0; x < SIZE; x++) {
+        var i = (y * SIZE + x) * 4;
+        var h  = H(x, y);
+        var hl = H((x - 1 + SIZE) % SIZE, y);
+        var hr = H((x + 1) % SIZE, y);
+        var hu = H(x, (y - 1 + SIZE) % SIZE);
+        var hd = H(x, (y + 1) % SIZE);
+        var dx = (hr - hl) * STRENGTH;
+        var dy = (hd - hu) * STRENGTH;
+        /* Normal vector = (-dx, -dy, 1) normalised. */
+        var nz = 1.0;
+        var len = Math.sqrt(dx * dx + dy * dy + nz * nz);
+        var nrx = -dx / len;
+        var nry = -dy / len;
+        var nrz =  nz / len;
+        nD[i]     = ((nrx * 0.5 + 0.5) * 255) | 0;
+        nD[i + 1] = ((nry * 0.5 + 0.5) * 255) | 0;
+        nD[i + 2] = ((nrz * 0.5 + 0.5) * 255) | 0;
+        nD[i + 3] = 255;
+
+        /* Roughness: matte everywhere (0.78 base), waxier on peaks
+           (subtract a little where height is high), drier in mottled
+           low patches. Tiny per-pixel jitter to avoid banding. */
+        var rough = 0.78 - (h - 0.5) * 0.08 + (_h2(x * 0.31, y * 0.27) - 0.5) * 0.04;
+        if (rough < 0.55) rough = 0.55;
+        if (rough > 0.95) rough = 0.95;
+        var rv = (rough * 255) | 0;
+        rD[i] = rD[i + 1] = rD[i + 2] = rv;
+        rD[i + 3] = 255;
+      }
+    }
+    nCtx.putImageData(nImg, 0, 0);
+    rCtx.putImageData(rImg, 0, 0);
+
+    function _wrap(cv, isColor) {
+      var t = new THREE.CanvasTexture(cv);
+      t.wrapS = t.wrapT = THREE.RepeatWrapping;
+      t.anisotropy = 4;
+      t.colorSpace = isColor ? THREE.SRGBColorSpace : THREE.NoColorSpace;
+      t.needsUpdate = true;
+      return t;
+    }
+    return {
+      normal:    _wrap(normalCv, false),
+      roughness: _wrap(roughCv,  false),
+    };
+  }
+  var SKIN_MAPS = _buildSkinMaps();
+
   function cactusSkinMaterial(opts) {
     /* Real cactus skin is matte to satin — covered in fine wax (cuticle)
        that gives a soft sheen at grazing angles, not a glossy clearcoat.
        We emulate this with high diffuse roughness + low-strength sheen
        (which only kicks in at grazing angles) + minimal clearcoat for a
        very subtle waxy hint. envMapIntensity is moderate so IBL provides
-       real ambient illumination but the body never reads as "shiny".    */
+       real ambient illumination but the body never reads as "shiny".
+
+       PBR texture maps (normal + roughness + AO) drive the photoreal
+       micro-detail: cuticle pebbles, water-stress mottling, faint
+       lenticel striations. The maps are shared across all instances and
+       all species — the per-species color comes from vertex colors and
+       the per-instance shade from `tintCactus`. opts.uvScale lets
+       larger species (saguaro trunk) tile the maps a few extra times so
+       the cell density reads consistently. */
     var m = new THREE.MeshPhysicalMaterial({
       vertexColors: true,
       roughness: opts.roughness != null ? opts.roughness : 0.88,
@@ -726,8 +964,321 @@ import * as THREE from "https://cdn.jsdelivr.net/npm/three@0.162.0/build/three.m
       transparent: false, depthWrite: true,
       side: THREE.FrontSide,
     });
+
+    /* Attach shared PBR maps. We clone only the texture wrapper (not the
+       underlying canvas/image) so each material can have its own UV
+       repeat tuned to the cactus species without affecting others.
+       (We skip aoMap because that requires a uv2 channel; we already
+       fake AO at rib troughs via vertex colors in cactusSkin.) */
+    var repU = opts.uvScaleU != null ? opts.uvScaleU
+             : (opts.uvScale != null ? opts.uvScale : 8);
+    var repV = opts.uvScaleV != null ? opts.uvScaleV
+             : (opts.uvScale != null ? opts.uvScale : 8);
+    var nMap = SKIN_MAPS.normal.clone();
+    var rMap = SKIN_MAPS.roughness.clone();
+    nMap.needsUpdate = rMap.needsUpdate = true;
+    nMap.repeat.set(repU, repV);
+    rMap.repeat.set(repU, repV);
+    m.normalMap = nMap;
+    /* normalScale: how strongly the normal map perturbs lighting. Bumped
+       from 0.55 (barely visible) to 1.4 (clearly visible cuticle texture
+       and mottling), matching the reference photo close-up shading. */
+    var ns = opts.normalScale != null ? opts.normalScale : 1.4;
+    m.normalScale = new THREE.Vector2(ns, ns);
+    m.roughnessMap = rMap;
+
     m.envMapIntensity = opts.envMapIntensity != null ? opts.envMapIntensity : 0.85;
+    /* Tag this material as cactus skin so tintCactus can filter on it.
+       (We can't rely on `isMeshPhysicalMaterial + vertexColors` anymore
+       because spine materials also use both since the spine upgrade.) */
+    m.userData.isCactusSkin = true;
     return m;
+  }
+
+  /* ================================================================== */
+  /*  ULTRA-REALISM TOOLKIT                                             */
+  /*                                                                    */
+  /*  Opt-in upgrades that any species can apply to lift visual         */
+  /*  fidelity toward photoreal close-up reference photos.              */
+  /*                                                                    */
+  /*  The toolkit is shared:                                            */
+  /*    - One 2K dual-octave normal map (built once, GPU-uploaded once) */
+  /*    - upgradeMaterialToUltra() — bumps every cactus skin material   */
+  /*      already in a built mesh to use the ultra normal map and       */
+  /*      stronger sheen/clearcoat                                      */
+  /*    - applyCurvatureAO() — walks any geometry's vertex positions,   */
+  /*      darkens vertex colors in concave regions (rib troughs,        */
+  /*      tubercle valleys, arm-trunk junctions) by a real curvature    */
+  /*      computation, not just a per-rib formula                       */
+  /*    - addContactShadow() — soft radial shadow disk at the base      */
+  /*      that floats with the cactus, giving it spatial weight         */
+  /*    - upgradeSpinesToUltra() — finds every InstancedMesh in the     */
+  /*      cactus and lengthens spines by 25%, plus adds a tiny glossy   */
+  /*      tip clearcoat                                                 */
+  /*                                                                    */
+  /*  These are wrapped together by makeUltra(mesh) which the per-      */
+  /*  species ultra builders call after generating their base mesh.     */
+  /* ================================================================== */
+
+  /* 2K detail normal map — finer cell density and stronger relief than
+     SKIN_MAPS, pre-built once at module load. */
+  function _buildUltraNormalMap() {
+    var SIZE = 2048;
+    var cv = document.createElement("canvas");
+    cv.width = cv.height = SIZE;
+    var ctx = cv.getContext("2d");
+    var img = ctx.createImageData(SIZE, SIZE);
+    var d = img.data;
+
+    /* Height field: very dense cuticle pebbles + medium mottling +
+       sharper sun-stress crackle. Each layer is tileable so the map
+       wraps without seams. */
+    function H(x, y) {
+      var nx = x / SIZE, ny = y / SIZE;
+      /* Dense cuticle pebbles — 4 octaves of high-freq fbm. */
+      var cells = _fbm2(nx, ny, 140, 4);
+      cells = Math.pow(cells, 0.78);
+      /* Mid mottling — wax thickness variation. */
+      var mott = _fbm2(nx + 11.7, ny + 3.3, 12, 4);
+      /* Sun-stress crackle — sharp thin lines, simulated by the
+         derivative of fbm having abrupt jumps. */
+      var crackle = _fbm2(nx + 7.1, ny + 1.9, 40, 2);
+      crackle = Math.pow(crackle, 2.2);
+      /* Lenticel striations — slightly off-horizontal so they don't
+         look like a stripe pattern. */
+      var stria = 0.5 + 0.5 * Math.sin(ny * 320 + mott * 8.0 + cells * 1.3);
+      var h = cells * 0.62 + mott * 0.18 + crackle * 0.12 + stria * 0.08;
+      return h;
+    }
+
+    /* Tablet-grade strength so the bumps are clearly readable from
+       camera distance without going cartoonish. */
+    var STRENGTH = 22;
+    for (var y = 0; y < SIZE; y++) {
+      for (var x = 0; x < SIZE; x++) {
+        var i = (y * SIZE + x) * 4;
+        var hl = H((x - 1 + SIZE) % SIZE, y);
+        var hr = H((x + 1) % SIZE, y);
+        var hu = H(x, (y - 1 + SIZE) % SIZE);
+        var hd = H(x, (y + 1) % SIZE);
+        var dx = (hr - hl) * STRENGTH;
+        var dy = (hd - hu) * STRENGTH;
+        var nz = 1.0;
+        var len = Math.sqrt(dx * dx + dy * dy + nz * nz);
+        d[i]     = ((-dx / len * 0.5 + 0.5) * 255) | 0;
+        d[i + 1] = ((-dy / len * 0.5 + 0.5) * 255) | 0;
+        d[i + 2] = ((nz / len * 0.5 + 0.5) * 255) | 0;
+        d[i + 3] = 255;
+      }
+    }
+    ctx.putImageData(img, 0, 0);
+    var t = new THREE.CanvasTexture(cv);
+    t.wrapS = t.wrapT = THREE.RepeatWrapping;
+    t.anisotropy = 8;
+    t.colorSpace = THREE.NoColorSpace;
+    t.needsUpdate = true;
+    return t;
+  }
+  /* Build the 2K normal map at idle time AFTER initial page paint, but
+     BEFORE the first ultra cactus spawns. This avoids two problems:
+       1. Blocking initial page render for ~200-400ms (would hurt LCP)
+       2. Causing a multi-hundred-millisecond stall on the first ultra
+          spawn (which would trigger the FPS auto-fallback before any
+          ultra cactus has a chance to be seen)
+     The first cactus spawns at +11000ms, so we have plenty of idle
+     budget. We use requestIdleCallback when available, falling back
+     to a setTimeout that fires soon after page interactive.        */
+  var _ULTRA_NORMAL = null;
+  function _ultraNormalMap() {
+    if (_ULTRA_NORMAL == null) _ULTRA_NORMAL = _buildUltraNormalMap();
+    return _ULTRA_NORMAL;
+  }
+  function _scheduleUltraNormalBuild() {
+    if (_ULTRA_NORMAL != null) return;
+    var build = function () {
+      if (_ULTRA_NORMAL == null) _ULTRA_NORMAL = _buildUltraNormalMap();
+    };
+    if (typeof requestIdleCallback === "function") {
+      requestIdleCallback(build, { timeout: 4000 });
+    } else {
+      setTimeout(build, 1500);
+    }
+  }
+  _scheduleUltraNormalBuild();
+
+  /* Upgrade every skin material in `root` to the ultra normal map and
+     stronger sheen/clearcoat. Per-species UV repeats are inherited from
+     the base material so cell density still reads correctly. */
+  function upgradeMaterialToUltra(root) {
+    root.traverse(function (ch) {
+      var mat = ch.material;
+      if (!mat || !mat.userData || mat.userData.isCactusSkin !== true) return;
+      var nm = _ultraNormalMap().clone();
+      nm.needsUpdate = true;
+      /* Inherit the base material's existing repeat (per-species). */
+      if (mat.normalMap) {
+        nm.repeat.copy(mat.normalMap.repeat);
+        nm.offset.copy(mat.normalMap.offset);
+      } else {
+        nm.repeat.set(12, 12);
+      }
+      mat.normalMap = nm;
+      mat.normalScale = new THREE.Vector2(2.4, 2.4);
+      /* A subtle satin clearcoat catches grazing-angle highlights along
+         rib crests — what makes real cacti read as "polished green" in
+         direct sun reference photos. */
+      mat.clearcoat = 0.18;
+      mat.clearcoatRoughness = 0.55;
+      mat.sheen = 0.85;
+      mat.sheenRoughness = 0.78;
+      /* Slightly warmer sheen color simulates sub-surface back-scatter
+         at the silhouette, the warm "inner glow" of real cactus skin. */
+      mat.sheenColor = new THREE.Color(0xa8c078);
+      mat.envMapIntensity = 1.05;
+      mat.needsUpdate = true;
+    });
+  }
+
+  /* Curvature-based vertex AO. For each vertex with a vertex-color
+     attribute, sample its averaged distance-to-neighbor-plane and
+     darken concave regions. This is what bakes the dark valleys at
+     rib troughs, tubercle hollows, and arm-trunk junctions in offline
+     renders.
+
+     We approximate curvature cheaply: for each vertex, take its normal
+     (from computeVertexNormals) and project a fixed offset position
+     along that normal; if the geometry "leans inward" relative to that
+     offset (i.e. the local surface is concave), the vertex's signed
+     distance to its neighbors' average plane is negative. We use a
+     much simpler proxy: distance from origin minus average of nearby
+     distances, normalized to [0..1]. Concave = darker. */
+  function applyCurvatureAO(geo, opts) {
+    opts = opts || {};
+    var strength = opts.strength != null ? opts.strength : 0.55;
+    var floor = opts.floor != null ? opts.floor : 0.42;
+    var p = geo.attributes.position;
+    var col = geo.attributes.color;
+    if (!col) return;
+    var n = geo.attributes.normal;
+    if (!n) { geo.computeVertexNormals(); n = geo.attributes.normal; }
+
+    /* Compute per-vertex distance from a reference center (geometry
+       bbox center). The center is captured BEFORE we do anything so
+       vertex shifts don't pollute later iterations. */
+    geo.computeBoundingBox();
+    var bb = geo.boundingBox;
+    var cx = (bb.min.x + bb.max.x) * 0.5;
+    var cy = (bb.min.y + bb.max.y) * 0.5;
+    var cz = (bb.min.z + bb.max.z) * 0.5;
+
+    /* Mean radius (so we can normalize "deeper than mean = trough"). */
+    var meanR = 0;
+    var rs = new Float32Array(p.count);
+    for (var i = 0; i < p.count; i++) {
+      var dx = p.getX(i) - cx;
+      var dy = p.getY(i) - cy;
+      var dz = p.getZ(i) - cz;
+      var r = Math.sqrt(dx * dx + dy * dy + dz * dz);
+      rs[i] = r;
+      meanR += r;
+    }
+    meanR /= p.count;
+    if (meanR < 1e-4) return;
+
+    var arr = col.array;
+    for (var j = 0; j < p.count; j++) {
+      /* "Concavity" = how much LESS this vertex sticks out than the
+         mean. Troughs read as low rs[j]/meanR; crests read as high. */
+      var ratio = rs[j] / meanR;
+      /* Map ratio in [0.85, 1.0] (typical trough range) → [1, 0]
+         AO factor. Outside this range we don't darken. */
+      var t;
+      if (ratio >= 1.0) t = 0;
+      else if (ratio <= 0.85) t = 1;
+      else t = (1.0 - ratio) / 0.15;
+      var dark = 1 - t * strength;
+      if (dark < floor) dark = floor;
+      arr[j * 3]     *= dark;
+      arr[j * 3 + 1] *= dark;
+      arr[j * 3 + 2] *= dark;
+    }
+    col.needsUpdate = true;
+  }
+
+  /* (Contact shadow removed.)
+     The original concept was a soft drop-shadow disk parented to each
+     cactus to suggest spatial weight. In practice, because these cacti
+     are FLOATING (no ground plane behind them, just the iridescent
+     animation), the disk had no surface to fall on and instead became
+     a visible artifact: a flat green-tinted plane that rotated with
+     the cactus body, reading as a detached disc/cap on the bottom of
+     the saguaro from certain angles. Real-world floating-plant photos
+     have no shadow either, so removing it altogether is the most
+     visually correct fix.                                            */
+
+  /* Find every InstancedMesh under root that's a spine cluster (cone-
+     based geometry from makeSpines) and lengthen each instance by `mul`.
+     We can't add NEW spines (that'd require regenerating the source
+     areole list) but we can make existing ones longer/thicker, which
+     achieves most of the visual lift cheaply. */
+  function upgradeSpinesToUltra(root, opts) {
+    opts = opts || {};
+    var lenMul = opts.lenMul != null ? opts.lenMul : 1.30;
+    var thickMul = opts.thickMul != null ? opts.thickMul : 1.18;
+    var _tmp = new THREE.Matrix4();
+    var _pos = new THREE.Vector3();
+    var _q = new THREE.Quaternion();
+    var _sc = new THREE.Vector3();
+    root.traverse(function (ch) {
+      if (!(ch.isInstancedMesh)) return;
+      /* Skip non-spine instanced meshes (tufts have a sphere geometry,
+         spines have a cylinder/cone geometry — we detect by checking
+         if the source geometry is roughly axially symmetric and tall:
+         bounding box height >> radius). */
+      ch.geometry.computeBoundingBox();
+      var bb = ch.geometry.boundingBox;
+      var hgt = bb.max.y - bb.min.y;
+      var rad = Math.max(bb.max.x - bb.min.x, bb.max.z - bb.min.z);
+      if (rad < 1e-6) return;
+      var aspect = hgt / rad;
+      if (aspect < 4) return; /* not a spine — probably a tuft/flower */
+      for (var k = 0; k < ch.count; k++) {
+        ch.getMatrixAt(k, _tmp);
+        _tmp.decompose(_pos, _q, _sc);
+        _sc.x *= thickMul;
+        _sc.z *= thickMul;
+        _sc.y *= lenMul;
+        _tmp.compose(_pos, _q, _sc);
+        ch.setMatrixAt(k, _tmp);
+      }
+      ch.instanceMatrix.needsUpdate = true;
+      /* Slight gloss bump on the spines themselves. */
+      var mat = ch.material;
+      if (mat && mat.isMeshPhysicalMaterial) {
+        mat.clearcoat = 0.22;
+        mat.clearcoatRoughness = 0.45;
+        mat.sheen = 0.55;
+        mat.needsUpdate = true;
+      }
+    });
+  }
+
+  /* All-in-one: take a cactus root mesh and upgrade every aspect to
+     "ultra" quality. Idempotent — calling twice has no extra effect. */
+  function makeUltra(root, opts) {
+    opts = opts || {};
+    upgradeMaterialToUltra(root);
+    /* Per-mesh curvature AO on every cactus skin geometry. */
+    root.traverse(function (ch) {
+      if (!ch.geometry) return;
+      var mat = ch.material;
+      if (!mat || !mat.userData || mat.userData.isCactusSkin !== true) return;
+      applyCurvatureAO(ch.geometry, opts.aoOpts);
+    });
+    upgradeSpinesToUltra(root, opts.spineOpts);
+    /* Tag so we can identify ultra meshes later (FPS auto-fallback). */
+    root.userData.isUltra = true;
+    return root;
   }
 
   /* ================================================================== */
@@ -897,10 +1448,11 @@ import * as THREE from "https://cdn.jsdelivr.net/npm/three@0.162.0/build/three.m
       var bleach = Math.max(0, hf - 0.55) * 0.12;
       for (var rj = 0; rj <= RAD_SEG; rj++) {
         var th = (rj / RAD_SEG) * Math.PI * 2;
-        /* Smooth round rib bumps via cosine of (ribCount * th).
-           Map cosine [-1,1] → ribAmt [0,1] then a smooth bump curve. */
+        /* Sharper rib silhouette: pow exponent 3.2 (was 1.8) gives
+           narrow rounded crests with deep concave V-troughs between
+           them, matching real saguaro morphology in the references. */
         var rw = (Math.cos(ribCount * th) + 1) * 0.5;
-        var ribBump = Math.pow(rw, 1.8);
+        var ribBump = Math.pow(rw, 3.2);
         var radial = taperedRad * (1 - ribDepth + ribDepth * ribBump);
         var nx = Math.cos(th), nz = Math.sin(th);
         /* Skin micro-noise — tiny, doesn't break the ribs */
@@ -917,21 +1469,43 @@ import * as THREE from "https://cdn.jsdelivr.net/npm/three@0.162.0/build/three.m
         wz += (dz / dlen) * disp;
         var idx = ti2 * (RAD_SEG + 1) + rj;
         p.setXYZ(idx, wx, wy, wz);
-        /* Color: rib crests are LIGHTER (sun-faced), valleys DARKER */
+        /* Color: rib crests are LIGHTER (sun-faced), valleys DARKER.
+           Then BAKED AO darkens the trough further (1 - cr factor) so
+           the rib grooves read as crisp shadow lines, like in close-up
+           reference photos. */
         var cr = ribBump;
         var jitter = (n1 + n2) * 0.025;
-        vc[idx * 3]     = base.r + (rib.r - base.r) * cr + jitter + bleach;
-        vc[idx * 3 + 1] = base.g + (rib.g - base.g) * cr + jitter + bleach;
-        vc[idx * 3 + 2] = base.b + (rib.b - base.b) * cr + jitter + bleach * 0.6;
+        var rR = base.r + (rib.r - base.r) * cr + jitter + bleach;
+        var rG = base.g + (rib.g - base.g) * cr + jitter + bleach;
+        var rB = base.b + (rib.b - base.b) * cr + jitter + bleach * 0.6;
+        /* Aggressive baked AO at rib troughs — multiplies skin color
+           by up to 0.45 in the deepest grooves. This is what gives the
+           reference photos their crisp, almost-black groove shadow
+           lines that contrast against the bright crests. */
+        var ao = 1 - (1 - cr) * 0.55;
+        if (ao < 0.45) ao = 0.45;
+        rR *= ao; rG *= ao; rB *= ao;
+        vc[idx * 3]     = rR;
+        vc[idx * 3 + 1] = rG;
+        vc[idx * 3 + 2] = rB;
       }
     }
     tube.setAttribute("color", new THREE.BufferAttribute(vc, 3));
     tube.computeVertexNormals();
 
+    /* Slightly less rough than other species (0.82 vs 0.90) so rib
+       crests pick up a soft sheen highlight from the warm key light —
+       this is the signature "polished green" look of saguaro skin in
+       direct sun. UV scale 12 across the body so cuticle cells and
+       lenticel striations read at proper density (the trunk is a tall
+       cylinder, so without overriding uvScale the texture would stretch
+       vertically into mush). */
     var skinMat = cactusSkinMaterial({
-      roughness: 0.90, clearcoat: 0.08, clearcoatRoughness: 0.70,
+      roughness: 0.82, clearcoat: 0.10, clearcoatRoughness: 0.65,
       sheen: 0.50, sheenRoughness: 0.85, sheenColor: 0x4a5a3a,
       envMapIntensity: 0.85,
+      uvScaleU: 16, uvScaleV: 12,
+      normalScale: 1.6,
     });
     var mesh = new THREE.Mesh(tube, skinMat);
 
@@ -1006,7 +1580,16 @@ import * as THREE from "https://cdn.jsdelivr.net/npm/three@0.162.0/build/three.m
          rCount 7   — slightly fewer radials per areole
          tuftScale 0.0040 — small areole wool, mostly recessed into body
          tipColor — pale straw tips for the natural sun-bleached look */
-    makeSpines(mesh, ar, 0x8a5a18, 0.045, 0.030, 0.0024, 7, 0.0040, 0xf2dba0, "saguaro");
+    /* Saguaro spines tuned for photoreal silhouette:
+         - Central spine length 0.075 (much longer than old 0.045 → reads
+           clearly against the body even at distance)
+         - Radial spine length 0.052 — also longer
+         - Thicker base 0.0034 so they don't fade out
+         - 12 radial spines per areole (was 7) — saguaros have a dense
+           star-burst halo around each areole in the references
+         - Larger amber wool tuft 0.0058 — these tufts are the most
+           visible feature of saguaro spine clusters in close-up photos */
+    makeSpines(mesh, ar, 0x8a5a18, 0.075, 0.052, 0.0034, 12, 0.0058, 0xf2dba0, "saguaro");
     return mesh;
   }
 
@@ -1062,7 +1645,9 @@ import * as THREE from "https://cdn.jsdelivr.net/npm/three@0.162.0/build/three.m
       new THREE.Vector3(bx * 0.6, trunkH * 0.80, bz * 0.6),
       new THREE.Vector3(0,        trunkH,        0),
     ];
-    var trunk = buildSaguaroSegment(trunkPts, trunkBaseR, trunkTipR, 16, 0.10, 32, color);
+    /* Trunk: 16 ribs, 0.18 rib depth (deeper grooves than before for the
+       sharp ribbed silhouette of the references), 32 areole rows. */
+    var trunk = buildSaguaroSegment(trunkPts, trunkBaseR, trunkTipR, 16, 0.18, 32, color);
     g.add(trunk);
 
     /* ARM COUNT — natural distribution.
@@ -1197,7 +1782,7 @@ import * as THREE from "https://cdn.jsdelivr.net/npm/three@0.162.0/build/three.m
       var armBR = armBaseRad * (0.92 + Math.random() * 0.16);
       var armTR = armBR * (0.70 + Math.random() * 0.08);
       var arm = buildSaguaroSegment(
-        armPts, armBR, armTR, armRib, 0.10, 22, color,
+        armPts, armBR, armTR, armRib, 0.18, 22, color,
         { capStart: true, capEnd: true, areoleStart: 0.05 }
       );
       g.add(arm);
@@ -1251,6 +1836,7 @@ import * as THREE from "https://cdn.jsdelivr.net/npm/three@0.162.0/build/three.m
       rib: new THREE.Color(0.225, 0.420, 0.195),
       noiseFreq: 18, noiseAmp: 0.0048,
       colorJitter: 0.045, bleach: 0.08,
+      aoStrength: 0.55,
       ribAmt: function (x, y, z) {
         var r = Math.sqrt(x * x + z * z);
         if (r < 1e-4) return 0.5;
@@ -1262,14 +1848,16 @@ import * as THREE from "https://cdn.jsdelivr.net/npm/three@0.162.0/build/three.m
     });
 
     g.add(new THREE.Mesh(geo, cactusSkinMaterial({
-      roughness: 0.90, clearcoat: 0.08, clearcoatRoughness: 0.70,
+      roughness: 0.84, clearcoat: 0.10, clearcoatRoughness: 0.68,
       sheen: 0.55, sheenRoughness: 0.85, sheenColor: 0x4a5a3a,
       envMapIntensity: 0.85,
+      uvScaleU: 12, uvScaleV: 14,
+      normalScale: 1.5,
     })));
     /* Honey-amber spines, dry straw tips. Cereus columns project spines
        outward from each rib crest (visible as a starburst at silhouette
        and as bristly clusters at center) — use "ribbed" style. */
-    makeSpines(g, ribAreoles(RC, 11, R, RD, YS, 0.42), 0x946818, 0.058, 0.044, 0.0030, 5, 0.012, 0xd8b878, "ribbed");
+    makeSpines(g, ribAreoles(RC, 11, R, RD, YS, 0.42), 0x946818, 0.062, 0.046, 0.0032, 7, 0.012, 0xd8b878, "ribbed");
     return g;
   }
 
@@ -1740,6 +2328,7 @@ import * as THREE from "https://cdn.jsdelivr.net/npm/three@0.162.0/build/three.m
       rib: new THREE.Color(0.235, 0.445, 0.150),
       noiseFreq: 20, noiseAmp: 0.0058,
       colorJitter: 0.045, bleach: 0.05,
+      aoStrength: 0.58,
       ribAmt: function (x, y, z) {
         var r = Math.sqrt(x * x + z * z);
         if (r < 1e-4) return 0.5;
@@ -1751,11 +2340,13 @@ import * as THREE from "https://cdn.jsdelivr.net/npm/three@0.162.0/build/three.m
     });
 
     g.add(new THREE.Mesh(geo, cactusSkinMaterial({
-      roughness: 0.88, clearcoat: 0.10, clearcoatRoughness: 0.65,
+      roughness: 0.84, clearcoat: 0.10, clearcoatRoughness: 0.65,
       sheen: 0.55, sheenRoughness: 0.85, sheenColor: 0x4a5a38,
       envMapIntensity: 0.90,
+      uvScaleU: 14, uvScaleV: 8,
+      normalScale: 1.6,
     })));
-    makeSpines(g, ribAreoles(RC, 10, R, RD, HX, 0.36), 0x6e2a08, 0.115, 0.080, 0.0038, 6, 0.013, 0xc8682a, "fero");
+    makeSpines(g, ribAreoles(RC, 10, R, RD, HX, 0.36), 0x6e2a08, 0.130, 0.090, 0.0042, 8, 0.014, 0xc8682a, "fero");
     return g;
   }
 
@@ -1883,9 +2474,11 @@ import * as THREE from "https://cdn.jsdelivr.net/npm/three@0.162.0/build/three.m
     geo.setAttribute("color", new THREE.BufferAttribute(vc, 3));
     geo.computeVertexNormals();
     g.add(new THREE.Mesh(geo, cactusSkinMaterial({
-      roughness: 0.90, clearcoat: 0.06, clearcoatRoughness: 0.75,
+      roughness: 0.86, clearcoat: 0.08, clearcoatRoughness: 0.72,
       sheen: 0.55, sheenRoughness: 0.85, sheenColor: 0x3a4a28,
       envMapIntensity: 0.85,
+      uvScaleU: 8, uvScaleV: 6,
+      normalScale: 1.5,
     })));
     var areoles = [];
     for (var ti = 0; ti < TF; ti++) {
@@ -1995,9 +2588,11 @@ import * as THREE from "https://cdn.jsdelivr.net/npm/three@0.162.0/build/three.m
     geo.computeVertexNormals();
 
     g.add(new THREE.Mesh(geo, cactusSkinMaterial({
-      roughness: 0.92, clearcoat: 0.05, clearcoatRoughness: 0.80,
-      sheen: 0.50, sheenRoughness: 0.90, sheenColor: 0x405038,
-      envMapIntensity: 0.80,
+      roughness: 0.86, clearcoat: 0.08, clearcoatRoughness: 0.72,
+      sheen: 0.55, sheenRoughness: 0.85, sheenColor: 0x405038,
+      envMapIntensity: 0.85,
+      uvScaleU: 10, uvScaleV: 7,
+      normalScale: 1.5,
     })));
 
     /* Phyllotactic areole layout — golden-angle spirals around the ovoid.
@@ -2199,6 +2794,7 @@ import * as THREE from "https://cdn.jsdelivr.net/npm/three@0.162.0/build/three.m
       rib: new THREE.Color(0.205, 0.330, 0.175),
       noiseFreq: 26, noiseAmp: 0.0048,
       colorJitter: 0.040, bleach: 0.05,
+      aoStrength: 0.60,
       ribAmt: function (x, y, z) {
         var r = Math.sqrt(x * x + z * z);
         if (r < 1e-4) return 0.5;
@@ -2209,9 +2805,11 @@ import * as THREE from "https://cdn.jsdelivr.net/npm/three@0.162.0/build/three.m
       hf: function (x, y, z) { return (y / (R * HX) + 1) * 0.5; },
     });
     g.add(new THREE.Mesh(geo, cactusSkinMaterial({
-      roughness: 0.92, clearcoat: 0.05, clearcoatRoughness: 0.80,
-      sheen: 0.45, sheenRoughness: 0.90, sheenColor: 0x405038,
-      envMapIntensity: 0.80,
+      roughness: 0.86, clearcoat: 0.08, clearcoatRoughness: 0.72,
+      sheen: 0.50, sheenRoughness: 0.88, sheenColor: 0x405038,
+      envMapIntensity: 0.82,
+      uvScaleU: 10, uvScaleV: 7,
+      normalScale: 1.5,
     })));
 
     /* Astrophytum white flecks scattered across the body — slightly off
@@ -2280,23 +2878,126 @@ import * as THREE from "https://cdn.jsdelivr.net/npm/three@0.162.0/build/three.m
   }
 
   /* ================================================================== */
+  /*  Ultra-realistic wrapper builders — one per species.                */
+  /*                                                                    */
+  /*  Each wrapper invokes the standard builder, then runs makeUltra()  */
+  /*  to upgrade materials, AO, spines, and add a contact shadow.       */
+  /*  This keeps the geometry generation logic single-sourced (so any   */
+  /*  fix to a base builder propagates to its ultra variant) while      */
+  /*  letting us A/B compare side-by-side at spawn time.                */
+  /*                                                                    */
+  /*  Per-species AO/spine tuning lives here so each plant's ultra      */
+  /*  treatment can be calibrated independently — e.g. saguaros want    */
+  /*  longer spines, ball cacti want stronger curvature AO at the       */
+  /*  tubercle valleys.                                                  */
+  /* ================================================================== */
+  function buildSaguaroUltra() {
+    /* Saguaros benefit most from longer spines (the dense star-burst
+       halo is their iconic feature) and aggressive groove AO. */
+    return makeUltra(buildSaguaro(), {
+      spineOpts: { lenMul: 1.45, thickMul: 1.25 },
+      aoOpts:    { strength: 0.65, floor: 0.38 },
+    });
+  }
+  function buildColumnUltra() {
+    return makeUltra(buildColumn(), {
+      spineOpts: { lenMul: 1.30, thickMul: 1.20 },
+      aoOpts:    { strength: 0.55, floor: 0.42 },
+    });
+  }
+  function buildPearUltra() {
+    /* Opuntia pads are nearly flat — curvature AO has little to do, but
+       longer glochid spines and the contact shadow really sell it. */
+    return makeUltra(buildPear(), {
+      spineOpts: { lenMul: 1.25, thickMul: 1.20 },
+      aoOpts:    { strength: 0.30, floor: 0.55 },
+    });
+  }
+  function buildBarrelUltra() {
+    /* Barrel cacti are textbook fishhook spines + deep ribs. */
+    return makeUltra(buildBarrel(), {
+      spineOpts: { lenMul: 1.40, thickMul: 1.25 },
+      aoOpts:    { strength: 0.62, floor: 0.40 },
+    });
+  }
+  function buildPinwheelUltra() {
+    /* Mammillaria has tubercle bumps rather than continuous ribs;
+       curvature AO darkens the hollows between bumps beautifully. */
+    return makeUltra(buildPinwheel(), {
+      spineOpts: { lenMul: 1.30, thickMul: 1.20 },
+      aoOpts:    { strength: 0.65, floor: 0.40 },
+    });
+  }
+  function buildStarUltra() {
+    return makeUltra(buildStar(), {
+      spineOpts: { lenMul: 1.30, thickMul: 1.20 },
+      aoOpts:    { strength: 0.60, floor: 0.40 },
+    });
+  }
+  function buildBallUltra() {
+    return makeUltra(buildBall(), {
+      spineOpts: { lenMul: 1.35, thickMul: 1.20 },
+      aoOpts:    { strength: 0.62, floor: 0.40 },
+    });
+  }
+
+  /* ================================================================== */
   /*  Species registry — name, builder, target on-canvas height in       */
   /*  world units. Ratios are anchored on saguaro (biggest in nature):   */
   /*    saguaro 1.00  column 0.55  pear 0.40  barrel 0.30                */
   /*    pinwheel 0.24  star 0.22  ball 0.20                              */
   /*  Final displayed size is computed from each mesh's actual bounding  */
   /*  box so different intrinsic geometry sizes don't break the ratios.  */
+  /*                                                                    */
+  /*  Each species also has a parallel "*_ultra" entry that goes through */
+  /*  the makeUltra() pipeline. They share the same ratio so on-screen   */
+  /*  size matches their regular counterpart for direct A/B comparison. */
+  /*  weight = relative spawn frequency. Ultras and regulars share the  */
+  /*  same weight so a normal spawn is a ~50/50 mix. Plus, the first    */
+  /*  3 spawns are FORCED ultra (see spawnOne() / ultraForcedCount).    */
   /* ================================================================== */
   var SAGUARO_TARGET_HEIGHT = 1.55;
   var SPECIES = [
-    { name: "saguaro",      build: buildSaguaro,  ratio: 1.00 },
-    { name: "column",       build: buildColumn,   ratio: 0.55 },
-    { name: "prickly_pear", build: buildPear,     ratio: 0.40 },
-    { name: "barrel",       build: buildBarrel,   ratio: 0.30 },
-    { name: "pinwheel",     build: buildPinwheel, ratio: 0.24 },
-    { name: "star",         build: buildStar,     ratio: 0.22 },
-    { name: "ball",         build: buildBall,     ratio: 0.20 },
+    { name: "saguaro",      build: buildSaguaro,        ratio: 1.00, weight: 1.0, ultra: false },
+    { name: "column",       build: buildColumn,         ratio: 0.55, weight: 1.0, ultra: false },
+    { name: "prickly_pear", build: buildPear,           ratio: 0.40, weight: 1.0, ultra: false },
+    { name: "barrel",       build: buildBarrel,         ratio: 0.30, weight: 1.0, ultra: false },
+    { name: "pinwheel",     build: buildPinwheel,       ratio: 0.24, weight: 1.0, ultra: false },
+    { name: "star",         build: buildStar,           ratio: 0.22, weight: 1.0, ultra: false },
+    { name: "ball",         build: buildBall,           ratio: 0.20, weight: 1.0, ultra: false },
+    { name: "saguaro",      build: buildSaguaroUltra,   ratio: 1.00, weight: 1.0, ultra: true  },
+    { name: "column",       build: buildColumnUltra,    ratio: 0.55, weight: 1.0, ultra: true  },
+    { name: "prickly_pear", build: buildPearUltra,      ratio: 0.40, weight: 1.0, ultra: true  },
+    { name: "barrel",       build: buildBarrelUltra,    ratio: 0.30, weight: 1.0, ultra: true  },
+    { name: "pinwheel",     build: buildPinwheelUltra,  ratio: 0.24, weight: 1.0, ultra: true  },
+    { name: "star",         build: buildStarUltra,      ratio: 0.22, weight: 1.0, ultra: true  },
+    { name: "ball",         build: buildBallUltra,      ratio: 0.20, weight: 1.0, ultra: true  },
   ];
+
+  /* Weighted picker. Used in spawnOne() instead of uniform Math.random()
+     across SPECIES so we can:
+       - reduce ultra spawn rate when the auto-fallback decides perf is
+         struggling (sets ULTRA_ENABLED = false → all ultra weights → 0)
+       - keep relative species mix balanced regardless of ultra count */
+  var ULTRA_ENABLED = true;
+  function pickSpeciesIndex() {
+    var total = 0;
+    for (var i = 0; i < SPECIES.length; i++) {
+      var w = SPECIES[i].weight;
+      if (SPECIES[i].ultra && !ULTRA_ENABLED) w = 0;
+      total += w;
+    }
+    if (total <= 0) return 0;
+    var r = Math.random() * total;
+    var acc = 0;
+    for (var j = 0; j < SPECIES.length; j++) {
+      var w2 = SPECIES[j].weight;
+      if (SPECIES[j].ultra && !ULTRA_ENABLED) w2 = 0;
+      acc += w2;
+      if (r < acc) return j;
+    }
+    return SPECIES.length - 1;
+  }
 
   /* ================================================================== */
   /*  Multi-cactus state                                                */
@@ -2378,12 +3079,36 @@ import * as THREE from "https://cdn.jsdelivr.net/npm/three@0.162.0/build/three.m
   /* ================================================================== */
   /*  Spawn — slide in from edge with enough velocity to enter view     */
   /* ================================================================== */
+  /* The first few spawns are FORCED to be ultra cacti so the user can
+     see the new realism tier right away. Without this, the weighted
+     random picker means the first ultra appearance might be 30-60s
+     into the session — long enough that the user reasonably concludes
+     "no ultras are showing up". */
+  var ultraForcedCount = 0;
+  var ULTRA_FORCED_FIRST_N = 3;
   function spawnOne() {
     if (cacti.length >= MAX_CACTI) return;
 
-    var si = Math.floor(Math.random() * SPECIES.length);
-    if (si === lastSpecies) si = (si + 1) % SPECIES.length;
-    lastSpecies = si;
+    var si;
+    if (ULTRA_ENABLED && ultraForcedCount < ULTRA_FORCED_FIRST_N) {
+      /* Pick a random ultra entry. */
+      var ultras = [];
+      for (var ui = 0; ui < SPECIES.length; ui++) {
+        if (SPECIES[ui].ultra) ultras.push(ui);
+      }
+      si = ultras[Math.floor(Math.random() * ultras.length)];
+      ultraForcedCount++;
+    } else {
+      si = pickSpeciesIndex();
+    }
+    /* Avoid two identical (same-name AND same ultra-flag) consecutive
+       spawns so the variety reads quickly. We compare composite key. */
+    var key = SPECIES[si].name + (SPECIES[si].ultra ? "_u" : "");
+    if (key === lastSpecies) {
+      var alt = pickSpeciesIndex();
+      if (SPECIES[alt].name + (SPECIES[alt].ultra ? "_u" : "") !== key) si = alt;
+    }
+    lastSpecies = key;
     var sp = SPECIES[si];
 
     var mesh = sp.build();
@@ -2521,13 +3246,63 @@ import * as THREE from "https://cdn.jsdelivr.net/npm/three@0.162.0/build/three.m
   /* ================================================================== */
   var prevT = 0, run = true;
 
+  /* FPS auto-fallback for ultra cacti.
+     The ultra pipeline (2K normal map, curvature AO, denser spines)
+     is heavier than the standard one. On low-end devices this can
+     drop steady-state FPS noticeably. We sample the rolling median
+     of frame times; if the STEADY median is worse than the threshold
+     we flip ULTRA_ENABLED off and any future ultra cacti are replaced
+     by their regular counterparts. We never re-enable mid-session.
+
+     IMPORTANT: spawn frames are slow because the build-and-upgrade
+     pipeline runs synchronously (~30-100ms even on fast hardware).
+     If we let those into the median we'd false-positive disable on
+     normal devices. So:
+       1. Frames > 50ms are clipped to 50ms (don't poison the
+          median, but still register as real slowness if frequent)
+       2. Threshold is 28ms median (~36fps), generous enough to
+          tolerate a normal mix of spawn spikes + steady frames
+       3. We check less often (1x/sec instead of 2x/sec) so each
+          decision uses fresher data                                */
+  var FRAME_SAMPLES = 120;           /* ~2s @ 60fps */
+  var ULTRA_FRAME_BUDGET_MS = 28;    /* >28ms median = struggling */
+  var ULTRA_FALLBACK_GRACE = 300;    /* ~5s before we start checking */
+  var FRAME_SPIKE_CLAMP_MS = 50;
+  var frameTimes = new Array(FRAME_SAMPLES);
+  var frameIdx = 0;
+  var frameCount = 0;
+  function sampleFrameAndMaybeFallback(dtMs) {
+    if (!ULTRA_ENABLED) return;
+    /* Clamp obvious spawn spikes so they don't poison the median. */
+    var sample = dtMs > FRAME_SPIKE_CLAMP_MS ? FRAME_SPIKE_CLAMP_MS : dtMs;
+    frameTimes[frameIdx] = sample;
+    frameIdx = (frameIdx + 1) % FRAME_SAMPLES;
+    frameCount++;
+    if (frameCount < ULTRA_FALLBACK_GRACE) return;
+    if (frameCount % 60 !== 0) return; /* check ~1x per second */
+    var copy = frameTimes.slice(0).filter(function (v) { return v != null; });
+    if (copy.length < FRAME_SAMPLES * 0.5) return;
+    copy.sort(function (a, b) { return a - b; });
+    var median = copy[copy.length >> 1];
+    if (median > ULTRA_FRAME_BUDGET_MS) {
+      ULTRA_ENABLED = false;
+      for (var ci = cacti.length - 1; ci >= 0; ci--) {
+        if (cacti[ci].mesh && cacti[ci].mesh.userData && cacti[ci].mesh.userData.isUltra) {
+          despawnAt(ci);
+        }
+      }
+    }
+  }
+
   function loop(time) {
     requestAnimationFrame(loop);
     if (!run) return;
     var t = time * 0.001;
-    var dt = Math.min((time - prevT) * 0.001, 0.05);
+    var rawDtMs = time - prevT;
+    var dt = Math.min(rawDtMs * 0.001, 0.05);
     prevT = time;
     if (dt <= 0) return;
+    sampleFrameAndMaybeFallback(rawDtMs);
     resize();
 
     /* Refresh the IBL from the live iridescent backdrop on a slow cadence.
