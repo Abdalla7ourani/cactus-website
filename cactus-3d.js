@@ -1094,8 +1094,10 @@ import * as THREE from "https://cdn.jsdelivr.net/npm/three@0.162.0/build/three.m
   /*      darkens vertex colors in concave regions (rib troughs,        */
   /*      tubercle valleys, arm-trunk junctions) by a real curvature    */
   /*      computation, not just a per-rib formula                       */
-  /*    - addContactShadow() — soft radial shadow disk at the base      */
-  /*      that floats with the cactus, giving it spatial weight         */
+  /*    - addContactShadow() — DISABLED. Was a soft radial shadow      */
+  /*      disk at the base, but with free-tumbling cacti the disk      */
+  /*      rotates off-axis and slices through neighbours (Multiply-    */
+  /*      Blending plane). Function still defined; no longer called.   */
   /*    - upgradeSpinesToUltra() — finds every InstancedMesh in the     */
   /*      cactus and lengthens spines by 25%, plus adds a tiny glossy   */
   /*      tip clearcoat                                                 */
@@ -1399,12 +1401,21 @@ import * as THREE from "https://cdn.jsdelivr.net/npm/three@0.162.0/build/three.m
       applyCurvatureAO(ch.geometry, opts.aoOpts);
     });
     upgradeSpinesToUltra(root, opts.spineOpts);
-    if (opts.contactShadow !== false) {
-      var bb = new THREE.Box3().setFromObject(root);
-      var sph = new THREE.Sphere();
-      bb.getBoundingSphere(sph);
-      addContactShadow(root, sph.radius * 0.55);
-    }
+    /* Contact-shadow disc DISABLED.
+       The cacti float freely in space and tumble end-over-end (see
+       ROT_PROFILE), so the shadow plane — which is a flat horizontal
+       quad parented to the cactus root — rotates with the body and
+       ends up pointing in arbitrary directions instead of "down".
+       Worse, it's a 3× radius MultiplyBlending plane: when one
+       cactus's shadow plane intersects a neighbouring cactus's body
+       the neighbour gets sliced by a sharp dark band along the plane
+       edge — the user reported these as "transparent cuts" showing
+       the iridescent backdrop through other cacti (screenshots
+       2026-04-19). Without a real ground plane there's no physical
+       motivation for a contact shadow here, and removing it kills
+       the slice artefact entirely. addContactShadow / _shadowTex are
+       intentionally left defined in case a future grounded layout
+       wants to re-enable this. */
     /* Tag so we can identify ultra meshes later (FPS auto-fallback). */
     root.userData.isUltra = true;
     return root;
