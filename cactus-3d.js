@@ -1307,127 +1307,300 @@ import * as THREE from "https://cdn.jsdelivr.net/npm/three@0.162.0/build/three.m
   /*  ribs are gentle round bumps (high angular tessellation), not      */
   /*  sharp ridges. Areoles sit ON each rib crest in clean rows.        */
   /* ================================================================== */
-  /* Build a rounded dome that seals one open end of a saguaro tube. The
-     cap is a unit hemisphere (top half of a sphere) re-radiused per-rib to
-     match the tube's ribbed cross-section, then oriented so the flat side
-     faces inward along the tube's tangent at that endpoint. With caps in
-     place, the tube reads as a solid plant body — no hollow interior. */
-  function makeSaguaroCap(center, tangent, normal, binormal, radius, ribCount, ribDepth, color, isStart) {
-    /* Hemisphere = top half of a sphere along +Y. */
-    var SEG_W = Math.max(48, ribCount * 8);
-    var SEG_H = 14;
-    var hemi = new THREE.SphereGeometry(1, SEG_W, SEG_H, 0, Math.PI * 2, 0, Math.PI / 2);
-    var pos = hemi.attributes.position;
-    var vc = new Float32Array(pos.count * 3);
+  /* (Earlier iterations had a buildSaguaroCapWelded() helper here that
+   * built a separate dome geometry and welded it into the tube buffer.
+   * Both the welded-vertex and shared-rim variants showed persistent
+   * seam bugs (white slashes / hollow patches). Those approaches were
+   * removed in favor of the much simpler "cap-free" design now used in
+   * buildSaguaroSegment, where the tube's OWN radius tapers to zero at
+   * each end, naturally producing a rounded dome with zero seam to
+   * debug. No separate cap function needed.) */
+  function _saguaroCapWelded_DEAD(center, tangent, normal, binormal, radius, ribCount, ribDepth, color, isStart, segWidth) {
+    /* Use the SAME circumferential subdivisions as the tube body so cap
+       rim vertices line up exactly with tube t=0/t=1 ring vertices —
+       this makes the seam mathematically watertight (identical XYZ at
+       identical θ) and impossible to "see through". */
+    var SEG_W = segWidth || Math.max(48, ribCount * 8);
+    var SEG_H = 12; /* meridional subdivisions of the dome */
+
+    /* Outward unit vector — points away from the tube body. */
+    var ox = tangent.x * (isStart ? -1 : 1);
+    var oy = tangent.y * (isStart ? -1 : 1);
+    var oz = tangent.z * (isStart ? -1 : 1);
+    var ol = Math.sqrt(ox*ox + oy*oy + oz*oz) || 1;
+    ox /= ol; oy /= ol; oz /= ol;
+
+    /* Tube's cross-section frame (normal, binormal). The tube body's
+       vertex at angle θ on its t=0 ring is at:
+         center + (normal * cos(θ) + binormal * sin(θ)) * ribbedR(θ)
+       The cap rim must reproduce that exactly to seal the seam. */
+    var nxv = normal.x,   nyv = normal.y,   nzv = normal.z;
+    var bxv = binormal.x, byv = binormal.y, bzv = binormal.z;
+
     var rib = new THREE.Color(color.rib);
     var base = new THREE.Color(color.base);
 
-    /* Build TBN basis where +Y in the hemi maps to the OUTWARD tangent
-       direction (away from the tube body), and X/Z map to the cross-
-       section's normal/binormal. */
-    var outward = tangent.clone().multiplyScalar(isStart ? -1 : 1).normalize();
+    var DOME_H = 1.0;
+    var rings = SEG_H + 1;
+    var cols  = SEG_W + 1;
+    var vCount = rings * cols;
+    var positions = new Float32Array(vCount * 3);
+    var colors    = new Float32Array(vCount * 3);
+    var areoles = [];
 
-    for (var i = 0; i < pos.count; i++) {
-      var lx = pos.getX(i), ly = pos.getY(i), lz = pos.getZ(i);
-      /* θ around the cross-section axis (atan2 of the local x,z plane) */
-      var th = Math.atan2(lz, lx);
-      /* Match the tube's rib profile so the cap blends seamlessly with
-         the ribs at the seam. */
-      var rw = (Math.cos(ribCount * th) + 1) * 0.5;
-      var ribBump = Math.pow(rw, 1.8);
-      /* Lateral radius factor: shrinks toward the dome top so the dome
-         narrows naturally rather than ending in a flat disc. */
-      var lateral = Math.sqrt(lx * lx + lz * lz);
-      var ribbedR = radius * (1 - ribDepth + ribDepth * ribBump);
-      /* Recompose: lateral component is in the normal/binormal plane,
-         scaled by ribbedR; outward component is along the tube tangent.
-         Real saguaro arm tips are noticeably ROUNDED — almost a half-
-         sphere — not a shallow puck. Use ~1.0× radius for proper
-         hemisphere proportions. */
-      var DOME_HEIGHT_FACTOR = 1.00;
-      var radialAmount = ribbedR * lateral;
-      var outAmount = ly * radius * DOME_HEIGHT_FACTOR;
-      var wx = center.x
-        + normal.x   * Math.cos(th) * radialAmount
-        + binormal.x * Math.sin(th) * radialAmount
-        + outward.x  * outAmount;
-      var wy = center.y
-        + normal.y   * Math.cos(th) * radialAmount
-        + binormal.y * Math.sin(th) * radialAmount
-        + outward.y  * outAmount;
-      var wz = center.z
-        + normal.z   * Math.cos(th) * radialAmount
-        + binormal.z * Math.sin(th) * radialAmount
-        + outward.z  * outAmount;
-      /* Subtle skin micro-displacement, same scale as the tube */
-      var n1 = noise3(wx * 22, wy * 22, wz * 22) - 0.5;
-      var n2 = (noise3(wx * 55, wy * 55, wz * 55) - 0.5) * 0.5;
-      var disp = (n1 + n2) * 0.0030;
-      var dnx = wx - center.x, dny = wy - center.y, dnz = wz - center.z;
-      var dlen = Math.sqrt(dnx * dnx + dny * dny + dnz * dnz) || 1;
-      wx += (dnx / dlen) * disp;
-      wy += (dny / dlen) * disp;
-      wz += (dnz / dlen) * disp;
-      pos.setXYZ(i, wx, wy, wz);
-      var cr = ribBump;
-      var jitter = (n1 + n2) * 0.025;
-      vc[i * 3]     = base.r + (rib.r - base.r) * cr + jitter;
-      vc[i * 3 + 1] = base.g + (rib.g - base.g) * cr + jitter;
-      vc[i * 3 + 2] = base.b + (rib.b - base.b) * cr + jitter;
-    }
-    hemi.setAttribute("color", new THREE.BufferAttribute(vc, 3));
-    hemi.computeVertexNormals();
-    return hemi;
-  }
+    /* Generate vertices: rings × cols grid, ring 0 = rim (sealing seam),
+       ring SEG_H = apex. */
+    for (var ri = 0; ri < rings; ri++) {
+      /* lat: 0 at rim, π/2 at apex. */
+      var lat = (ri / SEG_H) * (Math.PI * 0.5);
+      var sinLat = Math.sin(lat);
+      var cosLat = Math.cos(lat);
 
-  function addSaguaroEndCaps(parentMesh, centers, tangents, normals, binormals, baseRad, tipRad, ribDepth, ribCount, color, skinMat, opts) {
-    opts = opts || {};
-    var capStart = opts.capStart !== false; /* default true */
-    var capEnd   = opts.capEnd   !== false; /* default true */
+      for (var ci = 0; ci < cols; ci++) {
+        var th = (ci / SEG_W) * Math.PI * 2;
+        var cosTh = Math.cos(th);
+        var sinTh = Math.sin(th);
 
-    /* IMPORTANT — winding/handedness fix:
-       The cap is built from a unit hemisphere whose triangles are wound
-       CCW-from-outside in its local (X, Y, Z) frame, where +Y is the
-       dome apex. We remap that local frame into world space using the
-       basis (normal, binormal, outward). For the basis to preserve
-       outward-facing winding we need
-           det(normal, binormal, outward) = +1  (right-handed)
-       Since the Frenet frame guarantees (T, N, B) is right-handed,
-           N × B = T   ⇒   det = T · outward = ±1
-       For the START cap, outward = -T  ⇒  det = -1 (left-handed)
-       and every triangle ends up wound CCW-from-INSIDE the dome. With
-       material.side = FrontSide that renders the dome as a hollow bowl
-       (the visible artifact in the previous build).
+        /* Rib profile — IDENTICAL to buildSaguaroSegment so the seam
+           ribs match exactly. */
+        var rw = (Math.cos(ribCount * th) + 1) * 0.5;
+        var ribBump = Math.pow(rw, 3.2);
+        var ribbedR = radius * (1 - ribDepth + ribDepth * ribBump);
 
-       Fix: pass a flipped binormal to the start cap so the local frame
-       becomes (N, -B, -T)  ⇒  det = +1, restoring outward-facing
-       winding without touching SphereGeometry's index buffer. */
-    if (capStart) {
-      var bnFlipped = binormals[0].clone().multiplyScalar(-1);
-      var startCap = makeSaguaroCap(
-        centers[0], tangents[0], normals[0], bnFlipped,
-        baseRad, ribCount, ribDepth, color, true
-      );
-      parentMesh.add(new THREE.Mesh(startCap, skinMat));
+        /* Lateral component shrinks from rim (cosLat=1) to apex
+           (cosLat=0); outward (Y in dome local) grows from 0 to radius. */
+        var lateralR = ribbedR * cosLat;
+        var outR     = sinLat * radius * DOME_H;
+
+        /* World-space position: center + (normal*cosTh + binormal*sinTh)
+           * lateralR + outward * outR. This is the SAME formula the tube
+           body uses for the rim, so ring 0 vertices coincide exactly
+           with the tube's t=0 ring vertices. */
+        var px = center.x + (nxv * cosTh + bxv * sinTh) * lateralR + ox * outR;
+        var py = center.y + (nyv * cosTh + byv * sinTh) * lateralR + oy * outR;
+        var pz = center.z + (nzv * cosTh + bzv * sinTh) * lateralR + oz * outR;
+
+        /* Skin micro-displacement (matches the tube body's noise scale). */
+        var n1 = noise3(px * 22, py * 22, pz * 22) - 0.5;
+        var n2 = (noise3(px * 55, py * 55, pz * 55) - 0.5) * 0.5;
+        var disp = (n1 + n2) * 0.0030;
+        var dx = px - center.x, dy = py - center.y, dz = pz - center.z;
+        var dlen = Math.sqrt(dx*dx + dy*dy + dz*dz) || 1;
+        px += (dx / dlen) * disp;
+        py += (dy / dlen) * disp;
+        pz += (dz / dlen) * disp;
+
+        var vi = (ri * cols + ci) * 3;
+        positions[vi    ] = px;
+        positions[vi + 1] = py;
+        positions[vi + 2] = pz;
+
+        /* Vertex color — same recipe as the tube body. */
+        var cr = ribBump;
+        var jitter = (n1 + n2) * 0.025;
+        var rR = base.r + (rib.r - base.r) * cr + jitter;
+        var rG = base.g + (rib.g - base.g) * cr + jitter;
+        var rB = base.b + (rib.b - base.b) * cr + jitter;
+        var ao = 1 - (1 - cr) * 0.55;
+        if (ao < 0.45) ao = 0.45;
+        rR *= ao; rG *= ao; rB *= ao;
+        colors[vi    ] = rR;
+        colors[vi + 1] = rG;
+        colors[vi + 2] = rB;
+      }
     }
 
-    if (capEnd) {
-      var lastIdx = centers.length - 1;
-      var endCap = makeSaguaroCap(
-        centers[lastIdx], tangents[lastIdx], normals[lastIdx], binormals[lastIdx],
-        tipRad, ribCount, ribDepth, color, false
-      );
-      parentMesh.add(new THREE.Mesh(endCap, skinMat));
+    /* Generate triangle indices. Two triangles per quad (ri,ci)→(ri+1,ci+1).
+       SELF-CORRECTING WINDING — to bullet-proof against off-by-one
+       handedness errors that would cause the cap to render as a hollow
+       bowl under THREE.FrontSide back-face culling, we compute the
+       triangle face normal from the actual world-space vertex positions
+       and compare it to the EXPECTED outward direction from the cap's
+       seam center. If they disagree (face normal points INWARD), we
+       reverse the winding for that quad.
+
+       Expected outward direction at quad (ri, ci):
+         The midpoint of the quad's projection on the rim is at angle
+         θ = ((ci + 0.5) / SEG_W) * 2π. The OUTWARD-FACING normal at the
+         rim is the unit vector along (normal*cosθ + binormal*sinθ) plus
+         a small contribution along ±tangent (the "outward" direction).
+         For most of the dome (the side wall), the radial component
+         dominates; near the apex the tangent component dominates. We
+         use the position vector from the seam-center to the quad
+         midpoint as a robust proxy: it always points OUTWARD relative
+         to the cap's surface, on both halves of the dome. */
+    var indices = new Uint32Array(SEG_H * SEG_W * 6);
+    var k = 0;
+    var capCenterX = center.x;
+    var capCenterY = center.y;
+    var capCenterZ = center.z;
+    for (var ri2 = 0; ri2 < SEG_H; ri2++) {
+      for (var ci2 = 0; ci2 < SEG_W; ci2++) {
+        var aIdx = ri2 * cols + ci2;
+        var bIdx = ri2 * cols + ci2 + 1;
+        var cIdx = (ri2 + 1) * cols + ci2;
+        var dIdx = (ri2 + 1) * cols + ci2 + 1;
+
+        var ax = positions[aIdx * 3], ay = positions[aIdx * 3 + 1], az = positions[aIdx * 3 + 2];
+        var bx = positions[bIdx * 3], by = positions[bIdx * 3 + 1], bz = positions[bIdx * 3 + 2];
+        var dx = positions[dIdx * 3], dy = positions[dIdx * 3 + 1], dz = positions[dIdx * 3 + 2];
+
+        /* Compute (b - a) × (d - a) — the face normal of the (a,b,d) tri. */
+        var ux = bx - ax, uy = by - ay, uz = bz - az;
+        var vx = dx - ax, vy = dy - ay, vz = dz - az;
+        var fnx = uy * vz - uz * vy;
+        var fny = uz * vx - ux * vz;
+        var fnz = ux * vy - uy * vx;
+
+        /* Expected outward direction: from the seam center to the quad
+           midpoint. Points away from the cap's interior. */
+        var mx = (ax + bx + dx) / 3 - capCenterX;
+        var my = (ay + by + dy) / 3 - capCenterY;
+        var mz = (az + bz + dz) / 3 - capCenterZ;
+
+        var dot = fnx * mx + fny * my + fnz * mz;
+
+        if (dot >= 0) {
+          /* Face normal already points outward → CCW from outside. */
+          indices[k++] = aIdx; indices[k++] = bIdx; indices[k++] = dIdx;
+          indices[k++] = aIdx; indices[k++] = dIdx; indices[k++] = cIdx;
+        } else {
+          /* Face normal points inward → flip winding so the OUTWARD
+             face becomes the front face. */
+          indices[k++] = aIdx; indices[k++] = dIdx; indices[k++] = bIdx;
+          indices[k++] = aIdx; indices[k++] = cIdx; indices[k++] = dIdx;
+        }
+      }
     }
+
+    /* Areole positions for spine clusters on the dome — sampled along
+       each rib crest from rim toward apex (skipping the very rim, which
+       overlaps the tube body's areoles, and the very apex, where we
+       place a single dense crown cluster). All positions in WORLD space
+       so they merge into the body's areole list directly. */
+    var AREOLE_ROWS = 3;
+    for (var ar_ri = 0; ar_ri < ribCount; ar_ri++) {
+      /* Crest angle for rib ar_ri. */
+      var crestTh = (ar_ri / ribCount) * Math.PI * 2;
+      var ccos = Math.cos(crestTh), csin = Math.sin(crestTh);
+      for (var ar_row = 0; ar_row < AREOLE_ROWS; ar_row++) {
+        /* u in (0, 1): 0=rim, 1=apex. Sample 0.18..0.70. */
+        var u = 0.18 + (ar_row / Math.max(1, AREOLE_ROWS - 1)) * 0.52;
+        var latA = u * Math.PI * 0.5;
+        var sLat = Math.sin(latA);
+        var cLat = Math.cos(latA);
+        var ribbedR_a = radius * 1.0; /* always on crest */
+        var lateralA = ribbedR_a * cLat;
+        var outAm = sLat * radius * DOME_H;
+        var apx = center.x + (nxv * ccos + bxv * csin) * lateralA + ox * outAm;
+        var apy = center.y + (nyv * ccos + byv * csin) * lateralA + oy * outAm;
+        var apz = center.z + (nzv * ccos + bzv * csin) * lateralA + oz * outAm;
+        /* Surface normal at this point: in the dome's local frame it's
+           the radial direction from the seam center, but in world space
+           it's the same combination of the (normal, binormal, outward)
+           basis vectors. */
+        var nrx = (nxv * ccos + bxv * csin) * cLat + ox * sLat;
+        var nry = (nyv * ccos + byv * csin) * cLat + oy * sLat;
+        var nrz = (nzv * ccos + bzv * csin) * cLat + oz * sLat;
+        var nrl = Math.sqrt(nrx*nrx + nry*nry + nrz*nrz) || 1;
+        nrx /= nrl; nry /= nrl; nrz /= nrl;
+        /* Tangent — meridional direction, perpendicular to the normal. */
+        var trx = -(nxv * ccos + bxv * csin) * sLat + ox * cLat;
+        var tryV = -(nyv * ccos + byv * csin) * sLat + oy * cLat;
+        var trz = -(nzv * ccos + bzv * csin) * sLat + oz * cLat;
+        var trl = Math.sqrt(trx*trx + tryV*tryV + trz*trz) || 1;
+        trx /= trl; tryV /= trl; trz /= trl;
+        areoles.push({
+          p: new THREE.Vector3(apx, apy, apz),
+          n: new THREE.Vector3(nrx, nry, nrz),
+          t: new THREE.Vector3(trx, tryV, trz),
+        });
+      }
+    }
+    /* Crown spine cluster at the very apex of the dome. */
+    areoles.push({
+      p: new THREE.Vector3(
+        center.x + ox * radius * DOME_H,
+        center.y + oy * radius * DOME_H,
+        center.z + oz * radius * DOME_H
+      ),
+      n: new THREE.Vector3(ox, oy, oz),
+      t: new THREE.Vector3(nxv, nyv, nzv),
+    });
+
+    return {
+      positions: positions,
+      colors: colors,
+      indices: indices,
+      areoles: areoles,
+      cols: cols,
+      rings: rings,
+      isStart: isStart,
+    };
   }
 
   function buildSaguaroSegment(curvePts, baseRad, tipRad, ribCount, ribDepth, areolesPerRib, color, segOpts) {
     segOpts = segOpts || {};
     var curve = new THREE.CatmullRomCurve3(curvePts, false, "catmullrom", 0.5);
-    var TUBE_SEG = 64;
+    var TUBE_SEG = 96; /* extra resolution so cap regions have smooth domes */
     var RAD_SEG = 144;
     var rTube = Math.max(baseRad, tipRad) * 1.20;
     var tube = new THREE.TubeGeometry(curve, TUBE_SEG, rTube, RAD_SEG, false);
+
+    /* CAP-FREE DOME APPROACH.
+     *
+     * Earlier iterations welded a separate dome geometry onto each end
+     * of the tube. No matter how carefully I matched positions, two
+     * persistent bugs kept resurfacing:
+     *   - thin "white slash" lines at the seams (lighting/normal
+     *     discontinuities at duplicated rim vertices, color jumps from
+     *     bleach offsets, etc.)
+     *   - rectangular transparent patches when face-winding handedness
+     *     ended up flipped for some random Frenet-frame initialisations.
+     *
+     * RADICAL RETHINK: don't build a separate cap at all. Instead, taper
+     * the TUBE'S OWN RADIUS toward zero at the first and last few rings
+     * so the tube naturally rounds itself off into a dome shape. The
+     * TubeGeometry produces a SINGLE continuous indexed mesh — so there
+     * are zero seams to debug, zero duplicated vertices, zero handedness
+     * questions. The end "cap" is just the smoothly-tapered last few
+     * rings of the same tube.
+     *
+     * Implementation:
+     *   - Define a CAP_FRACTION of the tube length (e.g. 8%) at each end
+     *     where the radius profile transitions from "full ribbed
+     *     cylinder" to "rounded dome".
+     *   - Inside the cap region, blend the radial distance with a
+     *     hemispherical falloff: r(t) = R * sin(π/2 * (t / capFrac))
+     *     for the start cap (so r(0) = 0, r(capFrac) = R), and
+     *     r(t) = R * sin(π/2 * ((1-t) / capFrac)) for the end cap.
+     *   - The rib amplitude also fades inside the cap region so the apex
+     *     reads as smooth dome (saguaros have smooth caps with spines on
+     *     them, not fluted ribs).
+     *   - Apex vertices (at t=0 and t=1) all collapse to the centerline
+     *     point (degenerate triangles fan out from there) — the standard
+     *     way TubeGeometry handles "closed" endpoints.
+     * Caller can disable either cap (segOpts.capStart/capEnd === false)
+     * — for arms, the start cap is disabled so the arm fuses smoothly
+     * into the trunk wall instead of forming a visible rounded shoulder.
+     */
+    var capStartEnabled = segOpts.capStart !== false;
+    var capEndEnabled   = segOpts.capEnd   !== false;
+    /* Cap region: 12% of arc at each end. Larger than before (was 8%) so
+       the dome has gentle curvature instead of a sharp pointy taper. */
+    var CAP_FRAC = 0.12;
+    /* Dome height ratio — how far the apex extends past the seam, as a
+       fraction of the seam radius. 0.55 = squashed hemisphere (looks
+       like a real saguaro top, not a pointy cone). 1.0 would be a full
+       hemisphere; anything > 1.0 starts to look like a witch's hat. */
+    var DOME_HEIGHT = 0.55;
+    /* Apex radius floor — the apex never collapses to a single point.
+       Instead the smallest ring has radius = APEX_FLOOR × seam radius.
+       This eliminates the degenerate-triangle ring at the apex (which
+       causes intermittent missing-cap renders due to face-normal
+       calculations on zero-area triangles), AND it gives the dome a
+       gently rounded crown like a real saguaro instead of a sharp tip. */
+    var APEX_FLOOR = 0.18;
 
     /* TubeGeometry uses Frenet frames internally. We need the same per-
        vertex "arc length t" and "around angle θ". TubeGeometry indexes
@@ -1456,9 +1629,35 @@ import * as THREE from "https://cdn.jsdelivr.net/npm/three@0.162.0/build/three.m
     /* Vertex layout: row-major. Index i = ti * (RAD_SEG + 1) + rj. */
     for (var ti2 = 0; ti2 <= TUBE_SEG; ti2++) {
       var t = ti2 / TUBE_SEG;
+
+      /* Cap radius blending — dome shape at each end if the cap is
+         enabled. Uses a true hemisphere parameterization but with a
+         non-zero APEX_FLOOR so the apex doesn't collapse to a point
+         (avoids the "pointy cone" look AND the degenerate-triangle
+         ring that caused intermittent missing-cap renders).
+           u = 0 at the apex, 1 at the seam (cap region's outer edge)
+           radius multiplier: lerp(APEX_FLOOR, 1, sin(u * π/2))
+           rib amplitude:    smoothstep(u) — ribs fade out near apex */
+      var capR = 1.0;       /* radius multiplier (1 = full body radius) */
+      var ribAmpMul = 1.0;  /* rib depth multiplier (smooth at apex) */
+      var inCapStart = capStartEnabled && t < CAP_FRAC;
+      var inCapEnd   = capEndEnabled   && t > 1 - CAP_FRAC;
+      if (inCapStart) {
+        var u = t / CAP_FRAC;        /* 0 at apex, 1 at seam */
+        var sinU = Math.sin(u * Math.PI * 0.5);
+        capR = APEX_FLOOR + (1 - APEX_FLOOR) * sinU;
+        ribAmpMul = u * u * (3 - 2 * u);
+      } else if (inCapEnd) {
+        var u2 = (1 - t) / CAP_FRAC;
+        var sinU2 = Math.sin(u2 * Math.PI * 0.5);
+        capR = APEX_FLOOR + (1 - APEX_FLOOR) * sinU2;
+        ribAmpMul = u2 * u2 * (3 - 2 * u2);
+      }
+
       /* Saguaro radius profile: subtle bulge mid-column, smooth taper toward tip */
       var bulge = 1 + 0.07 * Math.sin(t * Math.PI);
-      var taperedRad = (baseRad + (tipRad - baseRad) * t) * bulge;
+      var taperedRad = (baseRad + (tipRad - baseRad) * t) * bulge * capR;
+      var ribDepthEff = ribDepth * ribAmpMul;
       var c = centers[ti2], n = normals[ti2], b = binormals[ti2];
       var hf = t;
       /* Slight color bleach near the top */
@@ -1470,7 +1669,7 @@ import * as THREE from "https://cdn.jsdelivr.net/npm/three@0.162.0/build/three.m
            them, matching real saguaro morphology in the references. */
         var rw = (Math.cos(ribCount * th) + 1) * 0.5;
         var ribBump = Math.pow(rw, 3.2);
-        var radial = taperedRad * (1 - ribDepth + ribDepth * ribBump);
+        var radial = taperedRad * (1 - ribDepthEff + ribDepthEff * ribBump);
         var nx = Math.cos(th), nz = Math.sin(th);
         /* Skin micro-noise — tiny, doesn't break the ribs */
         var wx = c.x + (n.x * nx + b.x * nz) * radial;
@@ -1484,6 +1683,27 @@ import * as THREE from "https://cdn.jsdelivr.net/npm/three@0.162.0/build/three.m
         wx += (dx / dlen) * disp;
         wy += (dy / dlen) * disp;
         wz += (dz / dlen) * disp;
+        /* Push the cap rings outward along ±tangent so the dome bulges
+           into a true hemisphere shape. Height follows cos(u * π/2),
+           which goes from DOME_HEIGHT*radius at the apex to 0 at the
+           seam — perfectly tangent to the body wall (no visible kink). */
+        if (inCapStart) {
+          var uS = t / CAP_FRAC;
+          var cosU = Math.cos(uS * Math.PI * 0.5); /* 1 at apex, 0 at seam */
+          var apexShiftS = -baseRad * DOME_HEIGHT * cosU; /* below center, along -tangent */
+          var tgS = tangents[ti2];
+          wx += tgS.x * apexShiftS;
+          wy += tgS.y * apexShiftS;
+          wz += tgS.z * apexShiftS;
+        } else if (inCapEnd) {
+          var uE = (1 - t) / CAP_FRAC;
+          var cosU2 = Math.cos(uE * Math.PI * 0.5);
+          var apexShiftE = tipRad * DOME_HEIGHT * cosU2; /* above center, along +tangent */
+          var tgE = tangents[ti2];
+          wx += tgE.x * apexShiftE;
+          wy += tgE.y * apexShiftE;
+          wz += tgE.z * apexShiftE;
+        }
         var idx = ti2 * (RAD_SEG + 1) + rj;
         p.setXYZ(idx, wx, wy, wz);
         /* Color: rib crests are LIGHTER (sun-faced), valleys DARKER.
@@ -1508,6 +1728,213 @@ import * as THREE from "https://cdn.jsdelivr.net/npm/three@0.162.0/build/three.m
       }
     }
     tube.setAttribute("color", new THREE.BufferAttribute(vc, 3));
+
+    /* CLOSE THE APEX HOLES.
+     *
+     * The TubeGeometry is open at both ends (t=0 and t=1) — without a
+     * cap there's a small APEX_FLOOR-radius hole at each end where the
+     * iridescent background shows through. Fix: weld a small fan of
+     * triangles into the SAME BufferGeometry, connecting the apex ring
+     * to a single new center vertex placed at the dome's apex.
+     *
+     * Crucially, the fan triangles SHARE the apex ring vertices with
+     * the dome triangles — there are no duplicate seam vertices, so
+     * computeVertexNormals will average normals correctly across the
+     * dome→fan junction (no creases) and the existing tube color array
+     * is preserved (no color jumps).
+     *
+     * Implementation:
+     *   - Read existing position/color/index buffers
+     *   - Append 1..2 new vertices (center of each enabled cap)
+     *   - Append SEG fan triangles per cap
+     *   - Replace the geometry's index buffer
+     */
+    var totalVertsToAdd = 0;
+    if (capStartEnabled) totalVertsToAdd++;
+    if (capEndEnabled)   totalVertsToAdd++;
+
+    if (totalVertsToAdd > 0) {
+      var oldPos = tube.attributes.position.array;
+      var oldCol = tube.attributes.color.array;
+      var oldIdxAttr = tube.index;
+      var oldIdxArr = oldIdxAttr ? oldIdxAttr.array : null;
+      /* If TubeGeometry didn't generate an index buffer (rare path), build
+         the standard tube index ourselves so we can append cap fans. */
+      if (!oldIdxArr) {
+        var triCount = TUBE_SEG * RAD_SEG * 6;
+        oldIdxArr = new Uint32Array(triCount);
+        var tk = 0;
+        for (var tri = 0; tri < TUBE_SEG; tri++) {
+          for (var trc = 0; trc < RAD_SEG; trc++) {
+            var ta = tri * (RAD_SEG + 1) + trc;
+            var tb = tri * (RAD_SEG + 1) + trc + 1;
+            var tc = (tri + 1) * (RAD_SEG + 1) + trc;
+            var td = (tri + 1) * (RAD_SEG + 1) + trc + 1;
+            oldIdxArr[tk++] = ta; oldIdxArr[tk++] = tc; oldIdxArr[tk++] = tb;
+            oldIdxArr[tk++] = tb; oldIdxArr[tk++] = tc; oldIdxArr[tk++] = td;
+          }
+        }
+      }
+
+      var oldVCount = oldPos.length / 3;
+      var newVCount = oldVCount + totalVertsToAdd;
+      var fanTrisPerCap = RAD_SEG; /* one tri per segment (last vertex wraps to first) */
+      var newIdxLen = oldIdxArr.length + totalVertsToAdd * fanTrisPerCap * 3;
+
+      var newPos = new Float32Array(newVCount * 3);
+      var newCol = new Float32Array(newVCount * 3);
+      var newIdx = new Uint32Array(newIdxLen);
+      newPos.set(oldPos, 0);
+      newCol.set(oldCol, 0);
+      newIdx.set(oldIdxArr, 0);
+
+      var nextV = oldVCount;
+      var nextI = oldIdxArr.length;
+
+      /* START cap fan: center vertex at the apex of the start dome,
+         triangles connect ring 0 (t=0) to that center vertex. Winding
+         must produce CCW from outside (looking up from below the start
+         apex), so triangles are (center, rj+1, rj). */
+      if (capStartEnabled) {
+        var c0 = centers[0];
+        var tg0 = tangents[0];
+        /* Apex sits a touch FURTHER out than the apex ring so the fan
+           closes the dome with a gentle outward curvature instead of a
+           flat disc at the apex ring's height. The extra extension is
+           ~APEX_FLOOR × baseRad — just enough to give the apex a soft
+           rounded crown like a real saguaro tip. */
+        var apexExtraS = baseRad * APEX_FLOOR * 0.6;
+        var capX = c0.x - tg0.x * (baseRad * DOME_HEIGHT + apexExtraS);
+        var capY = c0.y - tg0.y * (baseRad * DOME_HEIGHT + apexExtraS);
+        var capZ = c0.z - tg0.z * (baseRad * DOME_HEIGHT + apexExtraS);
+        var centerV = nextV;
+        newPos[centerV * 3    ] = capX;
+        newPos[centerV * 3 + 1] = capY;
+        newPos[centerV * 3 + 2] = capZ;
+        /* Center color: average of the apex ring's colors so there's
+           no visible color step into the fan. */
+        var aR = 0, aG = 0, aB = 0;
+        for (var ai = 0; ai < RAD_SEG; ai++) {
+          aR += oldCol[ai * 3    ];
+          aG += oldCol[ai * 3 + 1];
+          aB += oldCol[ai * 3 + 2];
+        }
+        newCol[centerV * 3    ] = aR / RAD_SEG;
+        newCol[centerV * 3 + 1] = aG / RAD_SEG;
+        newCol[centerV * 3 + 2] = aB / RAD_SEG;
+        nextV++;
+        /* Fan triangles with SELF-CORRECTING WINDING. Compute the face
+           normal of (center, rim0a, rim0b) and compare to expected
+           outward direction (-tangent). If face normal points the WRONG
+           way, swap rim0a/rim0b to flip winding. This bulletproofs the
+           cap against any handedness flip in the Frenet frame, the
+           noise displacement, or anything else that could cause the
+           cap to render as a hollow bowl instead of a closed dome. */
+        var expectedOutX_S = -tg0.x;
+        var expectedOutY_S = -tg0.y;
+        var expectedOutZ_S = -tg0.z;
+        for (var rj0 = 0; rj0 < RAD_SEG; rj0++) {
+          var rim0a = rj0;
+          var rim0b = (rj0 + 1) % (RAD_SEG + 1);
+          /* Face normal of (center, a, b) = (a-center) × (b-center) */
+          var ax_S = newPos[rim0a * 3]     - capX;
+          var ay_S = newPos[rim0a * 3 + 1] - capY;
+          var az_S = newPos[rim0a * 3 + 2] - capZ;
+          var bx_S = newPos[rim0b * 3]     - capX;
+          var by_S = newPos[rim0b * 3 + 1] - capY;
+          var bz_S = newPos[rim0b * 3 + 2] - capZ;
+          var fnx_S = ay_S * bz_S - az_S * by_S;
+          var fny_S = az_S * bx_S - ax_S * bz_S;
+          var fnz_S = ax_S * by_S - ay_S * bx_S;
+          var dot_S = fnx_S * expectedOutX_S + fny_S * expectedOutY_S + fnz_S * expectedOutZ_S;
+          newIdx[nextI++] = centerV;
+          if (dot_S >= 0) {
+            newIdx[nextI++] = rim0a;
+            newIdx[nextI++] = rim0b;
+          } else {
+            newIdx[nextI++] = rim0b;
+            newIdx[nextI++] = rim0a;
+          }
+        }
+      }
+
+      /* END cap fan: center vertex at the apex of the end dome,
+         triangles connect ring TUBE_SEG (t=1) to that center vertex.
+         Winding (center, rj, rj+1) is CCW from above the end apex. */
+      if (capEndEnabled) {
+        var lastIdx = TUBE_SEG;
+        var c1 = centers[lastIdx];
+        var tg1 = tangents[lastIdx];
+        var apexExtraE = tipRad * APEX_FLOOR * 0.6;
+        var capX2 = c1.x + tg1.x * (tipRad * DOME_HEIGHT + apexExtraE);
+        var capY2 = c1.y + tg1.y * (tipRad * DOME_HEIGHT + apexExtraE);
+        var capZ2 = c1.z + tg1.z * (tipRad * DOME_HEIGHT + apexExtraE);
+        var centerV2 = nextV;
+        newPos[centerV2 * 3    ] = capX2;
+        newPos[centerV2 * 3 + 1] = capY2;
+        newPos[centerV2 * 3 + 2] = capZ2;
+        var ringStart = lastIdx * (RAD_SEG + 1);
+        var aR2 = 0, aG2 = 0, aB2 = 0;
+        for (var ai2 = 0; ai2 < RAD_SEG; ai2++) {
+          aR2 += oldCol[(ringStart + ai2) * 3    ];
+          aG2 += oldCol[(ringStart + ai2) * 3 + 1];
+          aB2 += oldCol[(ringStart + ai2) * 3 + 2];
+        }
+        newCol[centerV2 * 3    ] = aR2 / RAD_SEG;
+        newCol[centerV2 * 3 + 1] = aG2 / RAD_SEG;
+        newCol[centerV2 * 3 + 2] = aB2 / RAD_SEG;
+        nextV++;
+        var expectedOutX_E = tg1.x;
+        var expectedOutY_E = tg1.y;
+        var expectedOutZ_E = tg1.z;
+        for (var rj1 = 0; rj1 < RAD_SEG; rj1++) {
+          var rim1a = ringStart + rj1;
+          var rim1b = ringStart + ((rj1 + 1) % (RAD_SEG + 1));
+          var ax_E = newPos[rim1a * 3]     - capX2;
+          var ay_E = newPos[rim1a * 3 + 1] - capY2;
+          var az_E = newPos[rim1a * 3 + 2] - capZ2;
+          var bx_E = newPos[rim1b * 3]     - capX2;
+          var by_E = newPos[rim1b * 3 + 1] - capY2;
+          var bz_E = newPos[rim1b * 3 + 2] - capZ2;
+          var fnx_E = ay_E * bz_E - az_E * by_E;
+          var fny_E = az_E * bx_E - ax_E * bz_E;
+          var fnz_E = ax_E * by_E - ay_E * bx_E;
+          var dot_E = fnx_E * expectedOutX_E + fny_E * expectedOutY_E + fnz_E * expectedOutZ_E;
+          newIdx[nextI++] = centerV2;
+          if (dot_E >= 0) {
+            newIdx[nextI++] = rim1a;
+            newIdx[nextI++] = rim1b;
+          } else {
+            newIdx[nextI++] = rim1b;
+            newIdx[nextI++] = rim1a;
+          }
+        }
+      }
+
+      tube.setAttribute("position", new THREE.BufferAttribute(newPos, 3));
+      tube.setAttribute("color",    new THREE.BufferAttribute(newCol, 3));
+      tube.setIndex(new THREE.BufferAttribute(newIdx, 1));
+      /* Re-extend UV buffer for the new center vertices (sample at u=0.5,
+         v matching the apex Y). Without this the new fan triangles would
+         sample uv=(0,0) and pick up a stray spot from the texture map. */
+      var oldUv = tube.attributes.uv ? tube.attributes.uv.array : null;
+      if (oldUv) {
+        var newUv = new Float32Array(newVCount * 2);
+        newUv.set(oldUv, 0);
+        var uvIdx = oldVCount;
+        if (capStartEnabled) {
+          newUv[uvIdx * 2    ] = 0.5;
+          newUv[uvIdx * 2 + 1] = 0;
+          uvIdx++;
+        }
+        if (capEndEnabled) {
+          newUv[uvIdx * 2    ] = 0.5;
+          newUv[uvIdx * 2 + 1] = 1;
+        }
+        tube.setAttribute("uv", new THREE.BufferAttribute(newUv, 2));
+      }
+    }
+
     tube.computeVertexNormals();
 
     /* Slightly less rough than other species (0.82 vs 0.90) so rib
@@ -1525,18 +1952,6 @@ import * as THREE from "https://cdn.jsdelivr.net/npm/three@0.162.0/build/three.m
       normalScale: 1.6,
     });
     var mesh = new THREE.Mesh(tube, skinMat);
-
-    /* Cap the open tube ends with rounded domes so the saguaro is visibly
-       solid (TubeGeometry leaves t=0 and t=1 wide open — without caps you
-       can see straight down the hollow interior of the trunk and arms).
-       Caller can suppress either cap; arms suppress their start cap so
-       they appear to fuse into the trunk rather than show a visible
-       disc/bowl at the attachment point. */
-    addSaguaroEndCaps(
-      mesh, centers, tangents, normals, binormals,
-      baseRad, tipRad, ribDepth, ribCount, color, skinMat,
-      { capStart: segOpts.capStart !== false, capEnd: segOpts.capEnd !== false }
-    );
 
     /* Areoles ON the rib crests, spaced in vertical rows.
 
@@ -1597,6 +2012,78 @@ import * as THREE from "https://cdn.jsdelivr.net/npm/three@0.162.0/build/three.m
          rCount 7   — slightly fewer radials per areole
          tuftScale 0.0040 — small areole wool, mostly recessed into body
          tipColor — pale straw tips for the natural sun-bleached look */
+    /* Add dome-area areoles (spine clusters on the rounded ends of the
+       trunk). The body areole loop above stops at the rib-region, but
+       real saguaros have spine clusters all the way up to the apex.
+       Uses the SAME hemisphere math as the geometry above (capR uses
+       APEX_FLOOR + (1-APEX_FLOOR)*sin(u*π/2), apexShift uses cos*DOME_HEIGHT)
+       so areoles sit perfectly ON the dome surface, not floating. */
+    for (var domeRi = 0; domeRi < ribCount; domeRi++) {
+      var domeRibTh = (domeRi / ribCount) * Math.PI * 2;
+      var domeNx = Math.cos(domeRibTh), domeNz = Math.sin(domeRibTh);
+      var domeRibPhase = (domeRi * GOLDEN) % 1;
+      /* 2 areoles per rib per cap region — distributed across the dome. */
+      var DOME_AREOLES = 2;
+      for (var domeAi = 0; domeAi < DOME_AREOLES; domeAi++) {
+        /* uPos in (0,1): how far along the cap (apex→seam). Skip very
+           apex (u<0.25) since the dome's tiny apex disc is too small to
+           hold a spine cluster meaningfully. */
+        var uPos = 0.30 + (domeAi + domeRibPhase * 0.4) / DOME_AREOLES * 0.55;
+        if (capStartEnabled) {
+          var tStart = uPos * CAP_FRAC;
+          if (tStart > areoleStart) {
+            var cs = curve.getPointAt(tStart);
+            var fIdxS = Math.min(TUBE_SEG, Math.floor(tStart * TUBE_SEG));
+            var n0s = normals[fIdxS], b0s = binormals[fIdxS];
+            var sinUs = Math.sin(uPos * Math.PI * 0.5);
+            var cosUs = Math.cos(uPos * Math.PI * 0.5);
+            var capRS_dome = APEX_FLOOR + (1 - APEX_FLOOR) * sinUs;
+            var bulgeS = 1 + 0.07 * Math.sin(tStart * Math.PI);
+            var taperedRadS = (baseRad + (tipRad - baseRad) * tStart) * bulgeS * capRS_dome;
+            var radCrestS = taperedRadS * (1 - ribDepth + ribDepth * 1.0);
+            var apexShiftS = -baseRad * DOME_HEIGHT * cosUs;
+            var posS = new THREE.Vector3(
+              cs.x + (n0s.x * domeNx + b0s.x * domeNz) * radCrestS + tangents[fIdxS].x * apexShiftS,
+              cs.y + (n0s.y * domeNx + b0s.y * domeNz) * radCrestS + tangents[fIdxS].y * apexShiftS,
+              cs.z + (n0s.z * domeNx + b0s.z * domeNz) * radCrestS + tangents[fIdxS].z * apexShiftS
+            );
+            /* Surface normal blends radial (toward outside of dome) with
+               the outward tangent direction — true dome normal. */
+            var norS = new THREE.Vector3(
+              (n0s.x * domeNx + b0s.x * domeNz) * sinUs - tangents[fIdxS].x * cosUs,
+              (n0s.y * domeNx + b0s.y * domeNz) * sinUs - tangents[fIdxS].y * cosUs,
+              (n0s.z * domeNx + b0s.z * domeNz) * sinUs - tangents[fIdxS].z * cosUs
+            ).normalize();
+            ar.push({ p: posS, n: norS, t: tangents[fIdxS].clone() });
+          }
+        }
+        if (capEndEnabled) {
+          var tEnd = 1 - uPos * CAP_FRAC;
+          var ce = curve.getPointAt(tEnd);
+          var fIdxE = Math.min(TUBE_SEG, Math.floor(tEnd * TUBE_SEG));
+          var n0e = normals[fIdxE], b0e = binormals[fIdxE];
+          var sinUe = Math.sin(uPos * Math.PI * 0.5);
+          var cosUe = Math.cos(uPos * Math.PI * 0.5);
+          var capRE_dome = APEX_FLOOR + (1 - APEX_FLOOR) * sinUe;
+          var bulgeE = 1 + 0.07 * Math.sin(tEnd * Math.PI);
+          var taperedRadE = (baseRad + (tipRad - baseRad) * tEnd) * bulgeE * capRE_dome;
+          var radCrestE = taperedRadE * (1 - ribDepth + ribDepth * 1.0);
+          var apexShiftE = tipRad * DOME_HEIGHT * cosUe;
+          var posE = new THREE.Vector3(
+            ce.x + (n0e.x * domeNx + b0e.x * domeNz) * radCrestE + tangents[fIdxE].x * apexShiftE,
+            ce.y + (n0e.y * domeNx + b0e.y * domeNz) * radCrestE + tangents[fIdxE].y * apexShiftE,
+            ce.z + (n0e.z * domeNx + b0e.z * domeNz) * radCrestE + tangents[fIdxE].z * apexShiftE
+          );
+          var norE = new THREE.Vector3(
+            (n0e.x * domeNx + b0e.x * domeNz) * sinUe + tangents[fIdxE].x * cosUe,
+            (n0e.y * domeNx + b0e.y * domeNz) * sinUe + tangents[fIdxE].y * cosUe,
+            (n0e.z * domeNx + b0e.z * domeNz) * sinUe + tangents[fIdxE].z * cosUe
+          ).normalize();
+          ar.push({ p: posE, n: norE, t: tangents[fIdxE].clone() });
+        }
+      }
+    }
+
     /* Saguaro spines tuned for photoreal silhouette:
          - Central spine length 0.075 (much longer than old 0.045 → reads
            clearly against the body even at distance)
@@ -1607,6 +2094,7 @@ import * as THREE from "https://cdn.jsdelivr.net/npm/three@0.162.0/build/three.m
          - Larger amber wool tuft 0.0058 — these tufts are the most
            visible feature of saguaro spine clusters in close-up photos */
     makeSpines(mesh, ar, 0x8a5a18, 0.075, 0.052, 0.0034, 12, 0.0058, 0xf2dba0, "saguaro");
+
     return mesh;
   }
 
@@ -3453,13 +3941,36 @@ import * as THREE from "https://cdn.jsdelivr.net/npm/three@0.162.0/build/three.m
     { threshold: 0, rootMargin: "200px" }
   ).observe(host);
 
+  /* Optional debug mode: pass `?cactus=saguaro` (or other species name)
+     in the URL to force only that species, and `?fastspawn=1` to start
+     spawning immediately and refill faster. Used while iterating on a
+     specific species; default behavior (no params) is unchanged. */
+  var __qs = (typeof location !== "undefined" && location.search) ? location.search : "";
+  var DEBUG_FORCE_SPECIES = (__qs.match(/[?&]cactus=([^&]+)/) || [])[1] || null;
+  var DEBUG_FAST_SPAWN = /[?&]fastspawn=1/.test(__qs);
+  if (DEBUG_FORCE_SPECIES) {
+    /* Override pickSpeciesIndex to only return matching species. */
+    var __origPick = pickSpeciesIndex;
+    pickSpeciesIndex = function () {
+      var matches = [];
+      for (var i = 0; i < SPECIES.length; i++) {
+        if (SPECIES[i].name === DEBUG_FORCE_SPECIES) matches.push(i);
+      }
+      if (matches.length === 0) return __origPick();
+      return matches[(Math.random() * matches.length) | 0];
+    };
+  }
+
   function scheduleSpawn() {
+    var delay = DEBUG_FAST_SPAWN ? (800 + Math.random() * 600)
+                                 : (7000 + Math.random() * 5000);
     setTimeout(function () {
       if (run && cacti.length < MAX_CACTI) spawnOne();
       scheduleSpawn();
-    }, 7000 + Math.random() * 5000);
+    }, delay);
   }
 
-  setTimeout(function () { spawnOne(); scheduleSpawn(); }, 11000);
+  var initialDelay = DEBUG_FAST_SPAWN ? 200 : 11000;
+  setTimeout(function () { spawnOne(); scheduleSpawn(); }, initialDelay);
   requestAnimationFrame(loop);
 })();
