@@ -1079,32 +1079,13 @@ import * as THREE from "https://cdn.jsdelivr.net/npm/three@0.162.0/build/three.m
     t.needsUpdate = true;
     return t;
   }
-  /* Build the 2K normal map at idle time AFTER initial page paint, but
-     BEFORE the first ultra cactus spawns. This avoids two problems:
-       1. Blocking initial page render for ~200-400ms (would hurt LCP)
-       2. Causing a multi-hundred-millisecond stall on the first ultra
-          spawn (which would trigger the FPS auto-fallback before any
-          ultra cactus has a chance to be seen)
-     The first cactus spawns at +11000ms, so we have plenty of idle
-     budget. We use requestIdleCallback when available, falling back
-     to a setTimeout that fires soon after page interactive.        */
+  /* Defer build until first use — saves ~30ms on initial page paint
+     for users who never see an ultra cactus (e.g. low-end devices). */
   var _ULTRA_NORMAL = null;
   function _ultraNormalMap() {
     if (_ULTRA_NORMAL == null) _ULTRA_NORMAL = _buildUltraNormalMap();
     return _ULTRA_NORMAL;
   }
-  function _scheduleUltraNormalBuild() {
-    if (_ULTRA_NORMAL != null) return;
-    var build = function () {
-      if (_ULTRA_NORMAL == null) _ULTRA_NORMAL = _buildUltraNormalMap();
-    };
-    if (typeof requestIdleCallback === "function") {
-      requestIdleCallback(build, { timeout: 4000 });
-    } else {
-      setTimeout(build, 1500);
-    }
-  }
-  _scheduleUltraNormalBuild();
 
   /* Upgrade every skin material in `root` to the ultra normal map and
      stronger sheen/clearcoat. Per-species UV repeats are inherited from
@@ -1205,16 +1186,46 @@ import * as THREE from "https://cdn.jsdelivr.net/npm/three@0.162.0/build/three.m
     col.needsUpdate = true;
   }
 
-  /* (Contact shadow removed.)
-     The original concept was a soft drop-shadow disk parented to each
-     cactus to suggest spatial weight. In practice, because these cacti
-     are FLOATING (no ground plane behind them, just the iridescent
-     animation), the disk had no surface to fall on and instead became
-     a visible artifact: a flat green-tinted plane that rotated with
-     the cactus body, reading as a detached disc/cap on the bottom of
-     the saguaro from certain angles. Real-world floating-plant photos
-     have no shadow either, so removing it altogether is the most
-     visually correct fix.                                            */
+  /* Soft circular contact shadow disk that floats with the cactus
+     (in world XY plane), giving it a sense of spatial weight against
+     the iridescent backdrop. Cheap (single quad with a radial
+     gradient) and uses additive-darken blending so it reads as a
+     subtle drop shadow without staining the backdrop. */
+  var _SHADOW_TEX = null;
+  function _shadowTex() {
+    if (_SHADOW_TEX != null) return _SHADOW_TEX;
+    var SZ = 256;
+    var cv = document.createElement("canvas");
+    cv.width = cv.height = SZ;
+    var ctx = cv.getContext("2d");
+    var grad = ctx.createRadialGradient(SZ / 2, SZ / 2, 0, SZ / 2, SZ / 2, SZ / 2);
+    grad.addColorStop(0.00, "rgba(0,0,0,0.55)");
+    grad.addColorStop(0.50, "rgba(0,0,0,0.18)");
+    grad.addColorStop(1.00, "rgba(0,0,0,0)");
+    ctx.fillStyle = grad;
+    ctx.fillRect(0, 0, SZ, SZ);
+    var t = new THREE.CanvasTexture(cv);
+    t.colorSpace = THREE.SRGBColorSpace;
+    _SHADOW_TEX = t;
+    return t;
+  }
+  function addContactShadow(parent, radius) {
+    var geo = new THREE.PlaneGeometry(radius * 3, radius * 3);
+    var mat = new THREE.MeshBasicMaterial({
+      map: _shadowTex(),
+      transparent: true,
+      depthWrite: false,
+      blending: THREE.MultiplyBlending,
+    });
+    var m = new THREE.Mesh(geo, mat);
+    m.position.y = -radius * 1.05;
+    m.rotation.x = -Math.PI / 2;
+    /* Render-after the cactus so it composites cleanly on top of
+       the iri backdrop. */
+    m.renderOrder = -1;
+    parent.add(m);
+    return m;
+  }
 
   /* Find every InstancedMesh under root that's a spine cluster (cone-
      based geometry from makeSpines) and lengthen each instance by `mul`.
@@ -1276,6 +1287,12 @@ import * as THREE from "https://cdn.jsdelivr.net/npm/three@0.162.0/build/three.m
       applyCurvatureAO(ch.geometry, opts.aoOpts);
     });
     upgradeSpinesToUltra(root, opts.spineOpts);
+    if (opts.contactShadow !== false) {
+      var bb = new THREE.Box3().setFromObject(root);
+      var sph = new THREE.Sphere();
+      bb.getBoundingSphere(sph);
+      addContactShadow(root, sph.radius * 0.55);
+    }
     /* Tag so we can identify ultra meshes later (FPS auto-fallback). */
     root.userData.isUltra = true;
     return root;
@@ -2952,9 +2969,9 @@ import * as THREE from "https://cdn.jsdelivr.net/npm/three@0.162.0/build/three.m
   /*  Each species also has a parallel "*_ultra" entry that goes through */
   /*  the makeUltra() pipeline. They share the same ratio so on-screen   */
   /*  size matches their regular counterpart for direct A/B comparison. */
-  /*  weight = relative spawn frequency. Ultras and regulars share the  */
-  /*  same weight so a normal spawn is a ~50/50 mix. Plus, the first    */
-  /*  3 spawns are FORCED ultra (see spawnOne() / ultraForcedCount).    */
+  /*  weight = relative spawn frequency. Ultra cacti spawn at 0.5× the  */
+  /*  rate of regular ones so the FPS budget stays sane and the user    */
+  /*  sees a healthy mix of both.                                        */
   /* ================================================================== */
   var SAGUARO_TARGET_HEIGHT = 1.55;
   var SPECIES = [
@@ -2965,13 +2982,13 @@ import * as THREE from "https://cdn.jsdelivr.net/npm/three@0.162.0/build/three.m
     { name: "pinwheel",     build: buildPinwheel,       ratio: 0.24, weight: 1.0, ultra: false },
     { name: "star",         build: buildStar,           ratio: 0.22, weight: 1.0, ultra: false },
     { name: "ball",         build: buildBall,           ratio: 0.20, weight: 1.0, ultra: false },
-    { name: "saguaro",      build: buildSaguaroUltra,   ratio: 1.00, weight: 1.0, ultra: true  },
-    { name: "column",       build: buildColumnUltra,    ratio: 0.55, weight: 1.0, ultra: true  },
-    { name: "prickly_pear", build: buildPearUltra,      ratio: 0.40, weight: 1.0, ultra: true  },
-    { name: "barrel",       build: buildBarrelUltra,    ratio: 0.30, weight: 1.0, ultra: true  },
-    { name: "pinwheel",     build: buildPinwheelUltra,  ratio: 0.24, weight: 1.0, ultra: true  },
-    { name: "star",         build: buildStarUltra,      ratio: 0.22, weight: 1.0, ultra: true  },
-    { name: "ball",         build: buildBallUltra,      ratio: 0.20, weight: 1.0, ultra: true  },
+    { name: "saguaro",      build: buildSaguaroUltra,   ratio: 1.00, weight: 0.5, ultra: true  },
+    { name: "column",       build: buildColumnUltra,    ratio: 0.55, weight: 0.5, ultra: true  },
+    { name: "prickly_pear", build: buildPearUltra,      ratio: 0.40, weight: 0.5, ultra: true  },
+    { name: "barrel",       build: buildBarrelUltra,    ratio: 0.30, weight: 0.5, ultra: true  },
+    { name: "pinwheel",     build: buildPinwheelUltra,  ratio: 0.24, weight: 0.5, ultra: true  },
+    { name: "star",         build: buildStarUltra,      ratio: 0.22, weight: 0.5, ultra: true  },
+    { name: "ball",         build: buildBallUltra,      ratio: 0.20, weight: 0.5, ultra: true  },
   ];
 
   /* Weighted picker. Used in spawnOne() instead of uniform Math.random()
@@ -3079,28 +3096,10 @@ import * as THREE from "https://cdn.jsdelivr.net/npm/three@0.162.0/build/three.m
   /* ================================================================== */
   /*  Spawn — slide in from edge with enough velocity to enter view     */
   /* ================================================================== */
-  /* The first few spawns are FORCED to be ultra cacti so the user can
-     see the new realism tier right away. Without this, the weighted
-     random picker means the first ultra appearance might be 30-60s
-     into the session — long enough that the user reasonably concludes
-     "no ultras are showing up". */
-  var ultraForcedCount = 0;
-  var ULTRA_FORCED_FIRST_N = 3;
   function spawnOne() {
     if (cacti.length >= MAX_CACTI) return;
 
-    var si;
-    if (ULTRA_ENABLED && ultraForcedCount < ULTRA_FORCED_FIRST_N) {
-      /* Pick a random ultra entry. */
-      var ultras = [];
-      for (var ui = 0; ui < SPECIES.length; ui++) {
-        if (SPECIES[ui].ultra) ultras.push(ui);
-      }
-      si = ultras[Math.floor(Math.random() * ultras.length)];
-      ultraForcedCount++;
-    } else {
-      si = pickSpeciesIndex();
-    }
+    var si = pickSpeciesIndex();
     /* Avoid two identical (same-name AND same ultra-flag) consecutive
        spawns so the variety reads quickly. We compare composite key. */
     var key = SPECIES[si].name + (SPECIES[si].ultra ? "_u" : "");
@@ -3247,45 +3246,36 @@ import * as THREE from "https://cdn.jsdelivr.net/npm/three@0.162.0/build/three.m
   var prevT = 0, run = true;
 
   /* FPS auto-fallback for ultra cacti.
-     The ultra pipeline (2K normal map, curvature AO, denser spines)
-     is heavier than the standard one. On low-end devices this can
-     drop steady-state FPS noticeably. We sample the rolling median
-     of frame times; if the STEADY median is worse than the threshold
-     we flip ULTRA_ENABLED off and any future ultra cacti are replaced
-     by their regular counterparts. We never re-enable mid-session.
-
-     IMPORTANT: spawn frames are slow because the build-and-upgrade
-     pipeline runs synchronously (~30-100ms even on fast hardware).
-     If we let those into the median we'd false-positive disable on
-     normal devices. So:
-       1. Frames > 50ms are clipped to 50ms (don't poison the
-          median, but still register as real slowness if frequent)
-       2. Threshold is 28ms median (~36fps), generous enough to
-          tolerate a normal mix of spawn spikes + steady frames
-       3. We check less often (1x/sec instead of 2x/sec) so each
-          decision uses fresher data                                */
-  var FRAME_SAMPLES = 120;           /* ~2s @ 60fps */
-  var ULTRA_FRAME_BUDGET_MS = 28;    /* >28ms median = struggling */
-  var ULTRA_FALLBACK_GRACE = 300;    /* ~5s before we start checking */
-  var FRAME_SPIKE_CLAMP_MS = 50;
+     The ultra pipeline (2K normal map, curvature AO, denser spines,
+     contact shadow) is significantly heavier than the standard one.
+     On low-end laptops/phones this can drop FPS noticeably. We sample
+     the rolling median of the last N frame times: if it's worse than
+     the threshold for a sustained window we flip ULTRA_ENABLED off,
+     and any future ultra cacti in the spawn queue are replaced by
+     their regular counterparts. We never re-enable mid-session — once
+     we've decided the device is too slow, we stay safe. */
+  var FRAME_SAMPLES = 90;            /* ~1.5s @ 60fps */
+  var ULTRA_FRAME_BUDGET_MS = 22;    /* >22ms median = struggling */
+  var ULTRA_FALLBACK_GRACE = 180;    /* frames before we start checking */
   var frameTimes = new Array(FRAME_SAMPLES);
   var frameIdx = 0;
   var frameCount = 0;
   function sampleFrameAndMaybeFallback(dtMs) {
     if (!ULTRA_ENABLED) return;
-    /* Clamp obvious spawn spikes so they don't poison the median. */
-    var sample = dtMs > FRAME_SPIKE_CLAMP_MS ? FRAME_SPIKE_CLAMP_MS : dtMs;
-    frameTimes[frameIdx] = sample;
+    frameTimes[frameIdx] = dtMs;
     frameIdx = (frameIdx + 1) % FRAME_SAMPLES;
     frameCount++;
     if (frameCount < ULTRA_FALLBACK_GRACE) return;
-    if (frameCount % 60 !== 0) return; /* check ~1x per second */
+    if (frameCount % 30 !== 0) return; /* check ~2x per second */
+    /* Cheap median via sort of a copy. */
     var copy = frameTimes.slice(0).filter(function (v) { return v != null; });
     if (copy.length < FRAME_SAMPLES * 0.5) return;
     copy.sort(function (a, b) { return a - b; });
     var median = copy[copy.length >> 1];
     if (median > ULTRA_FRAME_BUDGET_MS) {
       ULTRA_ENABLED = false;
+      /* Eagerly remove already-spawned ultra cacti so the framerate
+         actually recovers. They despawn naturally on next cycle. */
       for (var ci = cacti.length - 1; ci >= 0; ci--) {
         if (cacti[ci].mesh && cacti[ci].mesh.userData && cacti[ci].mesh.userData.isUltra) {
           despawnAt(ci);
