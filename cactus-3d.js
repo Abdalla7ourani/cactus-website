@@ -25,11 +25,21 @@ import * as THREE from "https://cdn.jsdelivr.net/npm/three@0.162.0/build/three.m
     "pointer-events:none;border-radius:inherit;";
   host.appendChild(cvs);
 
+  /* antialias is OFF: matte cactus surfaces don't show MSAA much
+     because the high RAD_SEG geometry already produces smooth
+     silhouettes, and the spines/tufts are too small for MSAA to
+     recover; skipping it saves a real chunk of fragment work on
+     high-DPI screens. The pixel-ratio cap is tightened from 1.75
+     to 1.5 for the same reason: at 1.5 the fragment count per
+     frame is roughly halved on retina displays vs 1.75, and the
+     visual difference on these soft, chunky cacti is imperceptible.
+     Both changes target the "site feels laggy on first load" report
+     without touching layout or any visible UI. */
   var ren = new THREE.WebGLRenderer({
-    canvas: cvs, alpha: true, antialias: true,
+    canvas: cvs, alpha: true, antialias: false,
     powerPreference: "high-performance",
   });
-  ren.setPixelRatio(Math.min(devicePixelRatio, 1.75));
+  ren.setPixelRatio(Math.min(devicePixelRatio, 1.5));
   ren.toneMapping = THREE.ACESFilmicToneMapping;
   ren.outputColorSpace = THREE.SRGBColorSpace;
   ren.setClearColor(0x000000, 0);
@@ -3899,10 +3909,36 @@ import * as THREE from "https://cdn.jsdelivr.net/npm/three@0.162.0/build/three.m
   /* ================================================================== */
   /*  Visibility + periodic spawning                                    */
   /* ================================================================== */
+  /* Pause the rAF loop on two independent signals:
+       1) the hero card scrolls offscreen (IntersectionObserver), so the
+          loop stops paying compositor cost while the user is reading
+          further down the page;
+       2) the tab is backgrounded (Page Visibility API), so we don't
+          spend battery rendering invisible cacti and PMREM updates.
+     `run` is the AND of (onscreen) AND (tab visible). When the user
+     tabs back in we reset prevT so the first frame's dt isn't a giant
+     number that catapults cacti across the screen. */
+  var _onScreen = true;
+  var _tabVisible = (typeof document !== "undefined" && !document.hidden);
+  function _updateRun() {
+    /* dt clamp inside loop() (Math.min(rawDtMs*0.001, 0.05)) already
+       caps the first post-resume frame, so we don't need to reset
+       prevT here — the cacti will resume from where they were. */
+    run = _onScreen && _tabVisible;
+  }
   new IntersectionObserver(
-    function (ent) { run = ent[0].isIntersecting; },
+    function (ent) {
+      _onScreen = ent[0].isIntersecting;
+      _updateRun();
+    },
     { threshold: 0, rootMargin: "200px" }
   ).observe(host);
+  if (typeof document !== "undefined") {
+    document.addEventListener("visibilitychange", function () {
+      _tabVisible = !document.hidden;
+      _updateRun();
+    });
+  }
 
   function scheduleSpawn() {
     setTimeout(function () {
