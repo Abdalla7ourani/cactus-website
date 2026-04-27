@@ -29,27 +29,14 @@ import * as THREE from "https://cdn.jsdelivr.net/npm/three@0.162.0/build/three.m
      because the high RAD_SEG geometry already produces smooth
      silhouettes, and the spines/tufts are too small for MSAA to
      recover; skipping it saves a real chunk of fragment work on
-     high-DPI screens.
-
-     Mobile/reduced-motion detection: phones have ~1/4 the GPU power
-     of a laptop and a higher devicePixelRatio (often 3.0), so a
-     1.5 cap still translates to massive fragment work on a tiny
-     mobile GPU that's also running the iri-card shader. We cap at
-     1.0 on phones (= one shader invocation per CSS pixel, which is
-     plenty for soft chunky cacti) and respect prefers-reduced-motion
-     by also using the lower cap. Desktop is unchanged at 1.5. */
-  var _MQ_MOBILE = (typeof window !== "undefined" && window.matchMedia)
-    ? window.matchMedia("(max-width:768px)") : null;
-  var _MQ_REDUCED = (typeof window !== "undefined" && window.matchMedia)
-    ? window.matchMedia("(prefers-reduced-motion:reduce)") : null;
-  var IS_MOBILE = !!(_MQ_MOBILE && _MQ_MOBILE.matches);
-  var REDUCED_MOTION = !!(_MQ_REDUCED && _MQ_REDUCED.matches);
-  var DPR_CAP = (IS_MOBILE || REDUCED_MOTION) ? 1.0 : 1.5;
+     high-DPI screens. The 1.5 pixel-ratio cap matches what most
+     hand-tuned three.js demos use and is visually indistinguishable
+     from native DPR on chunky matte plant surfaces. */
   var ren = new THREE.WebGLRenderer({
     canvas: cvs, alpha: true, antialias: false,
     powerPreference: "high-performance",
   });
-  ren.setPixelRatio(Math.min(devicePixelRatio, DPR_CAP));
+  ren.setPixelRatio(Math.min(devicePixelRatio, 1.5));
   ren.toneMapping = THREE.ACESFilmicToneMapping;
   ren.outputColorSpace = THREE.SRGBColorSpace;
   ren.setClearColor(0x000000, 0);
@@ -303,7 +290,15 @@ import * as THREE from "https://cdn.jsdelivr.net/npm/three@0.162.0/build/three.m
      freezing. Reflections on matte cacti barely change frame-to-frame
      so 1.5s feels visually identical. */
   var lastEnvRefresh = 0;
-  var ENV_REFRESH_MS = 1500;
+  /* Touch/coarse-pointer devices (phones, tablets) get a longer
+     env-refresh cadence. PMREM is the single biggest periodic hitch
+     in this module (~10-25ms on a desktop, more on a phone), and on
+     matte cactus surfaces a 3s update is visually indistinguishable
+     from 1.5s. This is a pure scheduling change — quality, species,
+     density and visuals are all identical. */
+  var _IS_COARSE = (typeof window !== "undefined" && window.matchMedia)
+    && window.matchMedia("(pointer:coarse)").matches;
+  var ENV_REFRESH_MS = _IS_COARSE ? 3000 : 1500;
   /* Skip env refreshes entirely during the page-load entrance window
      so the iri-card glitch + cactus slide-in looks perfectly fluid.
      12s lines up with the iri-card glitch finishing at ~8.7s plus
@@ -3333,11 +3328,7 @@ import * as THREE from "https://cdn.jsdelivr.net/npm/three@0.162.0/build/three.m
          page is settled, the user has scrolled or interacted, and the
          pre-built normal map is already in the GPU cache so subsequent
          ultra spawns are vastly cheaper. */
-  /* ULTRA cacti use 2K normal maps + curvature AO + denser spines —
-     beautiful on a desktop GPU, but a phone simply can't afford the
-     200-500ms bake or the per-frame fragment cost. Force-disable for
-     mobile and reduce-motion users from the start. */
-  var ULTRA_ENABLED = !(IS_MOBILE || REDUCED_MOTION);
+  var ULTRA_ENABLED = true;
   var _PAGE_T0 = (typeof performance !== "undefined") ? performance.now() : Date.now();
   var ULTRA_GRACE_MS = 25000;
   function pickSpeciesIndex() {
@@ -3365,12 +3356,7 @@ import * as THREE from "https://cdn.jsdelivr.net/npm/three@0.162.0/build/three.m
   /*  Multi-cactus state                                                */
   /* ================================================================== */
   var cacti = [];
-  /* Mobile cap is 2 (vs 4 on desktop): four floating PBR cacti each
-     doing curvature AO + physics on a phone GPU is what makes the
-     page feel unresponsive. Two looks visually almost identical at
-     phone screen sizes (the card is small) and halves the per-frame
-     vertex + fragment cost. */
-  var MAX_CACTI = IS_MOBILE ? 2 : 4;
+  var MAX_CACTI = 4;
   var GRAV = -0.025;
   var LIN_DAMP = 0.995;
   var ANG_DAMP = 0.997;
@@ -3654,8 +3640,21 @@ import * as THREE from "https://cdn.jsdelivr.net/npm/three@0.162.0/build/three.m
   /*  Pointer                                                           */
   /* ================================================================== */
   var px = 0.5, py = 0.5, pIn = false, pSpeed = 0, lastPT = 0;
+  /* Cache the host bounding rect rather than recomputing it on every
+     pointer/touch event. getBoundingClientRect() forces a synchronous
+     layout, and on mobile a touchmove fires ~60 times per second —
+     that's 60 forced layouts/sec on the page's biggest grid container.
+     We invalidate the cache on resize and scroll, both passive. */
+  var _hostRect = null;
+  function _invalidateRect() { _hostRect = null; }
+  function _getRect() {
+    if (!_hostRect) _hostRect = host.getBoundingClientRect();
+    return _hostRect;
+  }
+  window.addEventListener("resize", _invalidateRect, { passive: true });
+  window.addEventListener("scroll", _invalidateRect, { passive: true });
   function onPtr(e) {
-    var rect = host.getBoundingClientRect();
+    var rect = _getRect();
     var nx = (e.clientX - rect.left) / rect.width;
     var ny = (e.clientY - rect.top) / rect.height;
     var now = performance.now() * 0.001;
@@ -3995,17 +3994,10 @@ import * as THREE from "https://cdn.jsdelivr.net/npm/three@0.162.0/build/three.m
      scheduleSpawn() fires, spawnOne() will simply kick another
      prebuild and skip this turn — far better than freezing the
      visible animation. */
-  /* Honour prefers-reduced-motion: don't spawn or animate cacti at
-     all — the page still has all its layout/content, just without
-     the floating-cactus accent. The rAF loop still ticks (so any
-     theme change triggers a single re-render) but with zero cacti
-     it's effectively a no-op. */
-  if (!REDUCED_MOTION) {
-    pumpBuildQueue();              /* warm the pool right away (idle) */
-    setTimeout(function () {
-      spawnOne();
-      scheduleSpawn();
-    }, 13000);
-  }
+  pumpBuildQueue();                /* warm the pool right away (idle) */
+  setTimeout(function () {
+    spawnOne();
+    scheduleSpawn();
+  }, 13000);
   requestAnimationFrame(loop);
 })();
