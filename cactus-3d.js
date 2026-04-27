@@ -29,17 +29,27 @@ import * as THREE from "https://cdn.jsdelivr.net/npm/three@0.162.0/build/three.m
      because the high RAD_SEG geometry already produces smooth
      silhouettes, and the spines/tufts are too small for MSAA to
      recover; skipping it saves a real chunk of fragment work on
-     high-DPI screens. The pixel-ratio cap is tightened from 1.75
-     to 1.5 for the same reason: at 1.5 the fragment count per
-     frame is roughly halved on retina displays vs 1.75, and the
-     visual difference on these soft, chunky cacti is imperceptible.
-     Both changes target the "site feels laggy on first load" report
-     without touching layout or any visible UI. */
+     high-DPI screens.
+
+     Mobile/reduced-motion detection: phones have ~1/4 the GPU power
+     of a laptop and a higher devicePixelRatio (often 3.0), so a
+     1.5 cap still translates to massive fragment work on a tiny
+     mobile GPU that's also running the iri-card shader. We cap at
+     1.0 on phones (= one shader invocation per CSS pixel, which is
+     plenty for soft chunky cacti) and respect prefers-reduced-motion
+     by also using the lower cap. Desktop is unchanged at 1.5. */
+  var _MQ_MOBILE = (typeof window !== "undefined" && window.matchMedia)
+    ? window.matchMedia("(max-width:768px)") : null;
+  var _MQ_REDUCED = (typeof window !== "undefined" && window.matchMedia)
+    ? window.matchMedia("(prefers-reduced-motion:reduce)") : null;
+  var IS_MOBILE = !!(_MQ_MOBILE && _MQ_MOBILE.matches);
+  var REDUCED_MOTION = !!(_MQ_REDUCED && _MQ_REDUCED.matches);
+  var DPR_CAP = (IS_MOBILE || REDUCED_MOTION) ? 1.0 : 1.5;
   var ren = new THREE.WebGLRenderer({
     canvas: cvs, alpha: true, antialias: false,
     powerPreference: "high-performance",
   });
-  ren.setPixelRatio(Math.min(devicePixelRatio, 1.5));
+  ren.setPixelRatio(Math.min(devicePixelRatio, DPR_CAP));
   ren.toneMapping = THREE.ACESFilmicToneMapping;
   ren.outputColorSpace = THREE.SRGBColorSpace;
   ren.setClearColor(0x000000, 0);
@@ -3323,7 +3333,11 @@ import * as THREE from "https://cdn.jsdelivr.net/npm/three@0.162.0/build/three.m
          page is settled, the user has scrolled or interacted, and the
          pre-built normal map is already in the GPU cache so subsequent
          ultra spawns are vastly cheaper. */
-  var ULTRA_ENABLED = true;
+  /* ULTRA cacti use 2K normal maps + curvature AO + denser spines —
+     beautiful on a desktop GPU, but a phone simply can't afford the
+     200-500ms bake or the per-frame fragment cost. Force-disable for
+     mobile and reduce-motion users from the start. */
+  var ULTRA_ENABLED = !(IS_MOBILE || REDUCED_MOTION);
   var _PAGE_T0 = (typeof performance !== "undefined") ? performance.now() : Date.now();
   var ULTRA_GRACE_MS = 25000;
   function pickSpeciesIndex() {
@@ -3351,7 +3365,12 @@ import * as THREE from "https://cdn.jsdelivr.net/npm/three@0.162.0/build/three.m
   /*  Multi-cactus state                                                */
   /* ================================================================== */
   var cacti = [];
-  var MAX_CACTI = 4;
+  /* Mobile cap is 2 (vs 4 on desktop): four floating PBR cacti each
+     doing curvature AO + physics on a phone GPU is what makes the
+     page feel unresponsive. Two looks visually almost identical at
+     phone screen sizes (the card is small) and halves the per-frame
+     vertex + fragment cost. */
+  var MAX_CACTI = IS_MOBILE ? 2 : 4;
   var GRAV = -0.025;
   var LIN_DAMP = 0.995;
   var ANG_DAMP = 0.997;
@@ -3976,10 +3995,17 @@ import * as THREE from "https://cdn.jsdelivr.net/npm/three@0.162.0/build/three.m
      scheduleSpawn() fires, spawnOne() will simply kick another
      prebuild and skip this turn — far better than freezing the
      visible animation. */
-  pumpBuildQueue();                /* warm the pool right away (idle) */
-  setTimeout(function () {
-    spawnOne();
-    scheduleSpawn();
-  }, 13000);
+  /* Honour prefers-reduced-motion: don't spawn or animate cacti at
+     all — the page still has all its layout/content, just without
+     the floating-cactus accent. The rAF loop still ticks (so any
+     theme change triggers a single re-render) but with zero cacti
+     it's effectively a no-op. */
+  if (!REDUCED_MOTION) {
+    pumpBuildQueue();              /* warm the pool right away (idle) */
+    setTimeout(function () {
+      spawnOne();
+      scheduleSpawn();
+    }, 13000);
+  }
   requestAnimationFrame(loop);
 })();
