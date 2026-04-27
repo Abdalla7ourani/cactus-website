@@ -128,6 +128,42 @@ const t={preserveBehavior:!1},e=e=>{if("string"==typeof e)return[e,t];const[n,r=
 		document.addEventListener("DOMContentLoaded", () => {
 			document.documentElement.classList.add("mounted");
 		});
+
+		/* Homepage-only: always start at the top on (re)load.
+		 *
+		 * Browsers normally restore the previous scroll position on
+		 * refresh ("scrollRestoration: auto"), which the user doesn't
+		 * want for the homepage entrance animation — they want every
+		 * fresh load to start at the hero. We:
+		 *   1. Match only the home URL ("/" or "/index.html") so
+		 *      sub-pages keep their normal restore behaviour.
+		 *   2. Switch the History API to "manual" so the browser
+		 *      stops auto-restoring scroll.
+		 *   3. Force scrollTo(0,0) on script run, on DOMContentLoaded
+		 *      and on window load — covers slow scripts that might
+		 *      try to scroll in between.
+		 *   4. Skip the reset on bfcache restore (pageshow.persisted)
+		 *      — that's a back-button, where preserving scroll is the
+		 *      correct UX.
+		 */
+		(function () {
+			var p = location.pathname.replace(/\/+$/, "");
+			var isHome = p === "" || p === "/index.html" || p === "/index";
+			if (!isHome) return;
+			/* Don't override anchor jumps (e.g. /#footer) — those are
+			   explicit user intent to land on a section. */
+			if (location.hash && location.hash.length > 1) return;
+			try { history.scrollRestoration = "manual"; } catch (e) {}
+			var toTop = function () {
+				try { window.scrollTo(0, 0); } catch (e) {}
+			};
+			toTop();
+			document.addEventListener("DOMContentLoaded", toTop);
+			window.addEventListener("load", toTop);
+			window.addEventListener("pageshow", function (ev) {
+				if (!ev.persisted) toTop();
+			});
+		})();
 	</script>  <body> <script type="module" src="_astro/Navigation.astro_astro_type_script_index_0_lang.DwLhSQWz.js"></script> <nav id="navigation" class="group/navigation navigation fixed top-0 left-0 w-full h-(--navbar-height) bg-neutral-950 dark:bg-neutral-800 z-90 [.opened]:z-101 rounded-2xl -translate-y-full mounted:translate-y-0 [transition:background-color_500ms_var(--ease-out-cubic),translate_2000ms_1000ms_var(--ease-in-out-quart),z-index_1ms_500ms] [.opened]:[transition:background-color_500ms_var(--ease-in-out-cubic),translate_2000ms_1000ms_var(--ease-in-out-quart)]" data-lenis-prevent> <div id="navigation-inner" class="w-full bg-neutral-950 dark:bg-neutral-800 pb-px lg:p-px h-(--navbar-height) rounded-b-2xl"> <div class="relative z-2 w-full h-full grid grid-cols-[1fr_auto] lg:grid-cols-12 lg:grid-rows-1 place-items-stretch before:absolute before:z-2 before:inset-0 before:top-px lg:before:top-0 before:bg-white dark:before:bg-dark before:transition-mode before:rounded-2xl"> <div class="relative z-2 lg:col-span-3 place-content-center place-items-start lg:place-items-start px-md lg:border-r border-black dark:border-neutral-800"> <a href="index.html" class="group/logo flex items-center justify-start z-[1]"> <svg viewBox="0 0 600 186" fill="none" class="text-black dark:text-white transition-mode will-change-transform" style="height: clamp(2.25rem, 5vw, 2.75rem);">
 <image href="cactus-logo-black.png" x="0" y="13" width="160" height="160" />
 <text x="175" y="140" fill="currentColor" font-family="'Aeonik', sans-serif" font-weight="400" font-size="130" letter-spacing="-3">cactus</text>
