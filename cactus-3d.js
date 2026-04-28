@@ -3511,6 +3511,61 @@ import * as THREE from "https://cdn.jsdelivr.net/npm/three@0.162.0/build/three.m
     });
   }
 
+  /* ================================================================== */
+  /*  Depth tiers (parallax)                                            */
+  /* ================================================================== */
+  /* Each spawn picks one of these depth tiers so cacti naturally
+     stratify into "close to screen" / "midway" / "far back near the
+     iri-card". The PerspectiveCamera (FOV 40, position.z = 5) means a
+     cactus at z = +1.8 ends up only 3.2 units in front of the camera
+     (62% the distance compared to the z=0 plane), so it visually grows
+     ~60% larger and clearly reads as foreground. A cactus at z = -2.5
+     is at 7.5 units (50% further than z=0), shrinks ~33% and looks
+     tucked back near the colour animation behind everything else.
+
+     scaleBias is a small extra multiplier on top of the perspective
+     scaling — pushing the tiers a touch further apart so the parallax
+     "pops" as the user requested ("really close" vs "really far").
+
+     zoneMul scales the soft-zone radius so close cacti are kept in a
+     tighter visible area (their world-size is small relative to
+     screen) and far cacti drift through a wider area (looks more
+     atmospheric and prevents them from clumping in the centre).
+
+     Probabilities sum to 1.0. Mid-plane stays the most common so the
+     scene reads roughly the same as before, just with occasional
+     close/far accents that deliver the "blink and reveal layers"
+     feeling from the request. */
+  var DEPTH_TIERS = [
+    { name: "close", z: 1.8,  scaleBias: 1.10, zoneMul: 0.55, prob: 0.25 },
+    { name: "mid",   z: 0.0,  scaleBias: 1.00, zoneMul: 1.00, prob: 0.50 },
+    { name: "far",   z: -2.5, scaleBias: 0.92, zoneMul: 1.45, prob: 0.25 },
+  ];
+  function pickDepthTier() {
+    var r = Math.random();
+    var acc = 0;
+    for (var i = 0; i < DEPTH_TIERS.length; i++) {
+      acc += DEPTH_TIERS[i].prob;
+      if (r <= acc) return DEPTH_TIERS[i];
+    }
+    return DEPTH_TIERS[DEPTH_TIERS.length - 1];
+  }
+  /* When 4 cacti are floating, force at least one to be a non-mid
+     tier so the layered effect always reads clearly. Called from
+     attachOne() when the new cactus would be the 3rd or later. */
+  function pickDepthTierBalanced() {
+    var hasClose = false, hasFar = false;
+    for (var i = 0; i < cacti.length; i++) {
+      var z = cacti[i].pos.z;
+      if (z > 1.0) hasClose = true;
+      else if (z < -1.0) hasFar = true;
+    }
+    if (cacti.length >= 2 && !hasClose && !hasFar) {
+      return Math.random() < 0.5 ? DEPTH_TIERS[0] : DEPTH_TIERS[2];
+    }
+    return pickDepthTier();
+  }
+
   /* Append ONE prebuilt cactus to the live cacti list. This is the
      ONLY part of spawning that touches scene state, and it's O(1). */
   function attachOne(rec) {
@@ -3525,6 +3580,15 @@ import * as THREE from "https://cdn.jsdelivr.net/npm/three@0.162.0/build/three.m
     }
     scene.add(rec.mesh);
 
+    /* Pick a depth tier for this cactus and compute the screen-edge
+       half-extents at THAT z-plane, so the spawn position is always
+       just-off-screen relative to the user's view (perspective shrinks
+       the visible width/height as z decreases away from camera). */
+    var tier = pickDepthTierBalanced();
+    var planeDist = Math.max(0.1, cam.position.z - tier.z);
+    var halfH = planeDist * Math.tan((cam.fov * Math.PI) / 360);
+    var halfW = halfH * cam.aspect;
+
     var pos = new THREE.Vector3();
     var vel = new THREE.Vector3();
     var side = Math.floor(Math.random() * 4);
@@ -3533,10 +3597,10 @@ import * as THREE from "https://cdn.jsdelivr.net/npm/three@0.162.0/build/three.m
     var drift = (Math.random() - 0.5) * 0.03;
 
     switch (side) {
-      case 0: pos.set((Math.random() - 0.5) * vW * 0.6, vH + margin, 0); vel.set(drift, -speed, 0); break;
-      case 1: pos.set(vW + margin, (Math.random() - 0.5) * vH * 0.5, 0); vel.set(-speed, drift, 0); break;
-      case 2: pos.set((Math.random() - 0.5) * vW * 0.6, -vH - margin, 0); vel.set(drift, speed, 0); break;
-      case 3: pos.set(-vW - margin, (Math.random() - 0.5) * vH * 0.5, 0); vel.set(speed, drift, 0); break;
+      case 0: pos.set((Math.random() - 0.5) * halfW * 0.6, halfH + margin, tier.z); vel.set(drift, -speed, 0); break;
+      case 1: pos.set(halfW + margin, (Math.random() - 0.5) * halfH * 0.5, tier.z); vel.set(-speed, drift, 0); break;
+      case 2: pos.set((Math.random() - 0.5) * halfW * 0.6, -halfH - margin, tier.z); vel.set(drift, speed, 0); break;
+      case 3: pos.set(-halfW - margin, (Math.random() - 0.5) * halfH * 0.5, tier.z); vel.set(speed, drift, 0); break;
     }
 
     /* Apply species-specific rotation behaviour:
@@ -3571,8 +3635,20 @@ import * as THREE from "https://cdn.jsdelivr.net/npm/three@0.162.0/build/three.m
       bobPh: Math.random() * Math.PI * 2,
       age: 0,
       colR: rec.colR,
-      finalScale: rec.finalScale,
+      /* Multiply the precomputed finalScale by the tier's scaleBias so
+         close cacti read as clearly bigger and far ones as clearly
+         smaller — perspective alone gives a real difference, this
+         just dials it up so the layered effect "pops". */
+      finalScale: rec.finalScale * tier.scaleBias,
       rp: rp,
+      /* Depth-tier metadata used by the loop to (a) keep the cactus
+         pinned to its z-plane after pointer kicks and (b) size its
+         soft-zone radius proportionally to its on-screen visible
+         area. Without this, every kick or repulsion would slowly
+         drift cacti out of their tier and the parallax would mush
+         together within a few seconds. */
+      tierZ: tier.z,
+      zoneMul: tier.zoneMul,
     });
   }
 
@@ -3843,10 +3919,15 @@ import * as THREE from "https://cdn.jsdelivr.net/npm/three@0.162.0/build/three.m
       c.angV.multiplyScalar(ad);
 
       /* ---- soft zone: keep cacti floating in visible area ---- */
+      /* zoneR is the global default; per-cactus zoneMul widens the
+         zone for far cacti (their world position needs to span more
+         units to fill the same screen area) and tightens it for
+         close cacti (otherwise they'd drift off-screen quickly). */
       var spd = c.vel.length();
       if (spd < 0.22) {
-        var oX = Math.max(0, Math.abs(c.pos.x) - zoneR);
-        var oY = Math.max(0, Math.abs(c.pos.y) - zoneR);
+        var zR = zoneR * (c.zoneMul || 1);
+        var oX = Math.max(0, Math.abs(c.pos.x) - zR);
+        var oY = Math.max(0, Math.abs(c.pos.y) - zR);
         if (oX > 0) c.vel.x -= Math.sign(c.pos.x) * oX * 0.45 * dt;
         if (oY > 0) c.vel.y -= Math.sign(c.pos.y) * oY * 0.45 * dt;
       }
@@ -3875,6 +3956,18 @@ import * as THREE from "https://cdn.jsdelivr.net/npm/three@0.162.0/build/three.m
       }
 
       c.pos.addScaledVector(c.vel, dt);
+
+      /* Pin Z to the depth tier the cactus was spawned in.
+         Pointer kicks and inter-cactus repulsion add small Z-axis
+         components to vel; over time those would drift every cactus
+         toward z = 0 and collapse the parallax. We snap pos.z back
+         to its tier each frame (cheap and exact) and zero out vel.z
+         so the kick is fully redirected into XY motion (which is
+         what reads visually anyway in this 2.5D scene). */
+      if (c.tierZ !== undefined) {
+        c.pos.z = c.tierZ;
+        c.vel.z = 0;
+      }
 
       var as = c.angV.length();
       if (as > 1e-4) {
@@ -3935,7 +4028,13 @@ import * as THREE from "https://cdn.jsdelivr.net/npm/three@0.162.0/build/three.m
          opacity=1 at spawn time, so we don't need to touch the materials
          every frame either. */
 
-      if (c.pos.length() > despawnDist) despawnAt(ci);
+      /* Despawn based on the 2D screen-plane distance from origin so
+         the trigger is independent of which depth tier the cactus is
+         in (a far cactus has a non-trivial baseline length() from its
+         z offset alone; using full 3D length would despawn it too
+         early). */
+      var dpx = c.pos.x, dpy = c.pos.y;
+      if (Math.sqrt(dpx * dpx + dpy * dpy) > despawnDist) despawnAt(ci);
     }
 
     pSpeed *= 0.85;
