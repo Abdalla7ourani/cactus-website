@@ -56,6 +56,18 @@ import * as THREE from "https://cdn.jsdelivr.net/npm/three@0.162.0/build/three.m
   var scene = new THREE.Scene();
   var cam = new THREE.PerspectiveCamera(40, 1, 0.1, 50);
   cam.position.z = 5;
+  /* Subtle atmospheric fog. The cactus canvas is layered over the
+     iridescent colour-animation canvas via DOM stacking with
+     alpha:true, so any RGB tint the fog adds blends visually toward
+     the iri-card colours behind. Fog `near` starts beyond the
+     close-tier z (so close/mid cacti are essentially fog-free) and
+     ramps to `far` past the abyss tier so the deepest cacti get
+     about 35-40% colour wash that softens them into the background.
+     This is what makes the far cacti read as "hanging back near the
+     colour animation" — they literally bleed into it. The fog colour
+     is kept neutral light grey so it works with both the colourful
+     iri-card glitch and any future card variants. */
+  scene.fog = new THREE.Fog(0xeeeeee, cam.position.z + 1.5, cam.position.z + 12);
 
   /* ================================================================== */
   /*  Theme-aware lighting + environment                                */
@@ -3379,6 +3391,7 @@ import * as THREE from "https://cdn.jsdelivr.net/npm/three@0.162.0/build/three.m
 
   var _v1 = new THREE.Vector3();
   var _v2 = new THREE.Vector3();
+  var _v3 = new THREE.Vector3();
   var _q1 = new THREE.Quaternion();
 
   function collectMats(mesh) {
@@ -3536,10 +3549,24 @@ import * as THREE from "https://cdn.jsdelivr.net/npm/three@0.162.0/build/three.m
      scene reads roughly the same as before, just with occasional
      close/far accents that deliver the "blink and reveal layers"
      feeling from the request. */
+  /* Tiers tuned so the user genuinely reads four planes:
+       hero:  pressed up against the screen, can take ~⅔ of the canvas
+       close: clearly in front of the action
+       mid:   the default plane (most common)
+       far:   visibly receding, smaller and softened by fog
+       abyss: tucked right behind everything, mingling with the iri-card
+
+     Probabilities concentrate on close/mid/far for normal scenes;
+     hero and abyss are rare accents that sell the depth illusion when
+     they appear. With MAX_CACTI=4 you'll see hero or abyss every few
+     spawn cycles, which keeps the scene interesting without ever
+     getting cluttered with extreme tiers. */
   var DEPTH_TIERS = [
-    { name: "close", z: 1.8,  scaleBias: 1.10, zoneMul: 0.55, prob: 0.25 },
-    { name: "mid",   z: 0.0,  scaleBias: 1.00, zoneMul: 1.00, prob: 0.50 },
-    { name: "far",   z: -2.5, scaleBias: 0.92, zoneMul: 1.45, prob: 0.25 },
+    { name: "hero",  z:  2.6, scaleBias: 1.18, zoneMul: 0.40, prob: 0.10 },
+    { name: "close", z:  1.4, scaleBias: 1.08, zoneMul: 0.65, prob: 0.22 },
+    { name: "mid",   z:  0.0, scaleBias: 1.00, zoneMul: 1.00, prob: 0.36 },
+    { name: "far",   z: -3.5, scaleBias: 0.88, zoneMul: 1.65, prob: 0.22 },
+    { name: "abyss", z: -6.0, scaleBias: 0.80, zoneMul: 2.20, prob: 0.10 },
   ];
   function pickDepthTier() {
     var r = Math.random();
@@ -3550,18 +3577,23 @@ import * as THREE from "https://cdn.jsdelivr.net/npm/three@0.162.0/build/three.m
     }
     return DEPTH_TIERS[DEPTH_TIERS.length - 1];
   }
-  /* When 4 cacti are floating, force at least one to be a non-mid
-     tier so the layered effect always reads clearly. Called from
-     attachOne() when the new cactus would be the 3rd or later. */
+  /* When 2+ cacti are already floating, bias the next pick toward
+     missing depth bands so the user reliably sees layered parallax.
+     With 5 tiers we check three buckets: foreground (hero/close),
+     mid, and background (far/abyss) — the new cactus is forced into
+     whichever bucket isn't represented yet so a screenshot at any
+     moment shows real depth separation. */
   function pickDepthTierBalanced() {
-    var hasClose = false, hasFar = false;
+    var hasFg = false, hasMid = false, hasBg = false;
     for (var i = 0; i < cacti.length; i++) {
       var z = cacti[i].pos.z;
-      if (z > 1.0) hasClose = true;
-      else if (z < -1.0) hasFar = true;
+      if (z > 1.0) hasFg = true;
+      else if (z < -1.0) hasBg = true;
+      else hasMid = true;
     }
-    if (cacti.length >= 2 && !hasClose && !hasFar) {
-      return Math.random() < 0.5 ? DEPTH_TIERS[0] : DEPTH_TIERS[2];
+    if (cacti.length >= 2) {
+      if (!hasFg) return Math.random() < 0.55 ? DEPTH_TIERS[1] : DEPTH_TIERS[0]; // close or hero
+      if (!hasBg) return Math.random() < 0.55 ? DEPTH_TIERS[3] : DEPTH_TIERS[4]; // far or abyss
     }
     return pickDepthTier();
   }
@@ -3879,20 +3911,36 @@ import * as THREE from "https://cdn.jsdelivr.net/npm/three@0.162.0/build/three.m
     /* ---- inter-cactus repulsion ---- */
     /* O(n^2) but n<=MAX_CACTI=4 so it's fine. Early-out when there's
        only one (or zero) cactus saves the doubly-nested loop overhead
-       on the most-common in-flight state right after first spawn. */
+       on the most-common in-flight state right after first spawn.
+
+       Depth-aware twist: each cactus's effective collision radius is
+       inflated by 1 / (cam.z - tierZ) / cam.z so close cacti claim a
+       larger "personal-space bubble" — they're visibly bigger so they
+       need to start pushing each other away earlier. Without this,
+       close cacti happily overlap on screen even though their world
+       centres are still 'far enough' apart by the z=0 yardstick.
+       This is exactly the issue the user pointed out from the iPhone
+       screenshot. We also boost the spring force for close pairs so
+       the resolution is snappy rather than mushy. */
     var nC = cacti.length;
     if (nC > 1) {
+      var camZ = cam.position.z;
       for (var ai = 0; ai < nC; ai++) {
         for (var bi = ai + 1; bi < nC; bi++) {
           var ca = cacti[ai], cb = cacti[bi];
           var dx = ca.pos.x - cb.pos.x;
           var dy = ca.pos.y - cb.pos.y;
           var dist = Math.sqrt(dx * dx + dy * dy);
-          var minD = ca.colR + cb.colR;
+          var caRadMul = camZ / Math.max(0.4, camZ - ca.tierZ);
+          var cbRadMul = camZ / Math.max(0.4, camZ - cb.tierZ);
+          var minD = ca.colR * caRadMul + cb.colR * cbRadMul;
           if (dist < minD && dist > 0.001) {
             var overlap = minD - dist;
             var nx = dx / dist, ny = dy / dist;
-            var force = overlap * 3.0 * dt;
+            /* Stronger when at least one is in the close tier so the
+               separation snaps cleanly; gentle for far pairs. */
+            var pairBoost = (ca.tierZ > 1 || cb.tierZ > 1) ? 1.8 : 1.0;
+            var force = overlap * 3.0 * pairBoost * dt;
             ca.vel.x += nx * force;
             ca.vel.y += ny * force;
             cb.vel.x -= nx * force;
@@ -3934,14 +3982,43 @@ import * as THREE from "https://cdn.jsdelivr.net/npm/three@0.162.0/build/three.m
 
       /* ---- pointer kick ---- */
       if (mouseW) {
-        _v2.set(mouseW.x - c.pos.x, mouseW.y - c.pos.y, -c.pos.z);
-        var md = _v2.length();
-        if (md < pushRad && md > 0.01) {
-          var ff = 1 - md / pushRad; ff *= ff;
-          _v2.normalize().negate();
+        /* Re-project the pointer ray into THIS cactus's depth plane.
+           The original code measured a 3D distance that included
+           `-c.pos.z` as a z-component, which artificially inflated
+           the distance for close cacti (z=+1.8) and made them feel
+           heavy and stuck — the user explicitly reported this on
+           iPhone. By computing the on-plane mouse position once per
+           cactus, the touch maps cleanly to "where the user is
+           pressing on this cactus's image" regardless of tier. */
+        var mDir = _v3.copy(mouseW).sub(cam.position).normalize();
+        var tPlane = (c.pos.z - cam.position.z) / mDir.z;
+        var mPlaneX = cam.position.x + mDir.x * tPlane;
+        var mPlaneY = cam.position.y + mDir.y * tPlane;
+        var mdx = mPlaneX - c.pos.x;
+        var mdy = mPlaneY - c.pos.y;
+        var md = Math.sqrt(mdx * mdx + mdy * mdy);
+
+        /* Per-cactus interaction radius: scale the global pushRad by
+           the visible-screen size at this depth (close cacti span
+           more screen so the "touching it" zone is proportionally
+           bigger; far cacti span less so the zone shrinks). This
+           makes close cacti easy to grab even with a quick swipe. */
+        var depthScale = (cam.position.z - c.tierZ) / cam.position.z;
+        var localRad = pushRad / Math.max(0.4, depthScale);
+
+        if (md < localRad && md > 0.01) {
+          var ff = 1 - md / localRad; ff *= ff;
+          /* Strength multiplier by depth: close cacti get a much
+             stronger kick so a single drag shoves them off-screen
+             cleanly (this fixes the "feels resilient and stuck"
+             complaint). Far cacti get a softer kick so they stay
+             atmospheric. */
+          var depthBoost = c.tierZ > 1 ? 2.4 : (c.tierZ < -1 ? 0.6 : 1.0);
+          _v2.set(-mdx, -mdy, 0).divideScalar(md);
           var kick = Math.min(pSpeed * 3, 7) * ff;
-          var str = (ff * BASE_PUSH + kick) * dt;
-          c.vel.addScaledVector(_v2, str);
+          var str = (ff * BASE_PUSH + kick) * depthBoost * dt;
+          c.vel.x += _v2.x * str;
+          c.vel.y += _v2.y * str;
           /* Kick spin respects the species rotation profile so a poke
              on a saguaro doesn't send it tumbling sideways — it just
              yaws faster / leans a touch. */
