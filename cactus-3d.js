@@ -29,14 +29,23 @@ import * as THREE from "https://cdn.jsdelivr.net/npm/three@0.162.0/build/three.m
      because the high RAD_SEG geometry already produces smooth
      silhouettes, and the spines/tufts are too small for MSAA to
      recover; skipping it saves a real chunk of fragment work on
-     high-DPI screens. The 1.5 pixel-ratio cap matches what most
-     hand-tuned three.js demos use and is visually indistinguishable
-     from native DPR on chunky matte plant surfaces. */
+     high-DPI screens.
+
+     Pixel ratio: iPhones (and most modern Android flagships) report
+     devicePixelRatio of 3.0. A cap of 1.5 was halving render
+     resolution on those devices, which is visibly soft on close-up
+     cacti — the user reported "low resolution cacti" on iPhone.
+     We bump the cap so phones render at 2× native (still half of 3,
+     but plenty for crisp spines/normal-map detail), while desktops
+     stay at 1.75 like the original codebase had it. The Apple GPU
+     in modern iPhones is fast enough to handle this with antialias
+     off; what kills FPS on phones is overdraw + main-thread work,
+     which is what the rest of this file already optimises. */
   var ren = new THREE.WebGLRenderer({
     canvas: cvs, alpha: true, antialias: false,
     powerPreference: "high-performance",
   });
-  ren.setPixelRatio(Math.min(devicePixelRatio, 1.5));
+  ren.setPixelRatio(Math.min(devicePixelRatio, 2.0));
   ren.toneMapping = THREE.ACESFilmicToneMapping;
   ren.outputColorSpace = THREE.SRGBColorSpace;
   ren.setClearColor(0x000000, 0);
@@ -3704,8 +3713,17 @@ import * as THREE from "https://cdn.jsdelivr.net/npm/three@0.162.0/build/three.m
      their regular counterparts. We never re-enable mid-session — once
      we've decided the device is too slow, we stay safe. */
   var FRAME_SAMPLES = 90;            /* ~1.5s @ 60fps */
-  var ULTRA_FRAME_BUDGET_MS = 22;    /* >22ms median = struggling */
-  var ULTRA_FALLBACK_GRACE = 180;    /* frames before we start checking */
+  /* Threshold and grace tuned generously so phones keep the ULTRA
+     textures (2K normal map, curvature AO, denser spines) — the user
+     specifically wants real-life-looking surface detail on iPhone.
+     - 26ms (~38fps) is the boundary; below that the page already
+       feels smooth on a phone, especially since most of the time
+       there are 0-2 cacti visible (they spawn over time).
+     - 360-frame grace window (~6s @ 60fps) lets the heavy startup
+       work (PMREM bake, first cactus geometry build, env-refresh)
+       settle before we judge sustained performance. */
+  var ULTRA_FRAME_BUDGET_MS = 26;    /* >26ms median = struggling */
+  var ULTRA_FALLBACK_GRACE = 360;    /* frames before we start checking */
   var frameTimes = new Array(FRAME_SAMPLES);
   var frameIdx = 0;
   var frameCount = 0;
