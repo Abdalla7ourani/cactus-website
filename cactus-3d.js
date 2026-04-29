@@ -3998,22 +3998,59 @@ import * as THREE from "https://cdn.jsdelivr.net/npm/three@0.162.0/build/three.m
         var mdy = mPlaneY - c.pos.y;
         var md = Math.sqrt(mdx * mdx + mdy * mdy);
 
-        /* Per-cactus interaction radius: scale the global pushRad by
-           the visible-screen size at this depth (close cacti span
-           more screen so the "touching it" zone is proportionally
-           bigger; far cacti span less so the zone shrinks). This
-           makes close cacti easy to grab even with a quick swipe. */
+        /* Per-cactus interaction radius.
+           - Close/hero (depthScale<1): zone widens so they're easy to
+             grab (they cover more screen, the touch zone should match).
+           - Mid (depthScale≈1): unchanged.
+           - Far/abyss (depthScale>1): we DON'T shrink the zone any more.
+             User feedback: far cacti felt unreachable with a thumb on
+             phone — so we clamp the divisor at 1.0 (zone never gets
+             smaller than the global pushRad) and add a small bonus so
+             a thumb tap that lands near the visual centre still
+             registers. Net effect: every cactus has at least the
+             baseline interaction zone, regardless of depth. */
         var depthScale = (cam.position.z - c.tierZ) / cam.position.z;
-        var localRad = pushRad / Math.max(0.4, depthScale);
+        var radDiv = Math.min(1.0, Math.max(0.4, depthScale));
+        var localRad = pushRad / radDiv;
+        if (c.tierZ < -1) localRad *= 1.15;
 
         if (md < localRad && md > 0.01) {
           var ff = 1 - md / localRad; ff *= ff;
-          /* Strength multiplier by depth: close cacti get a much
-             stronger kick so a single drag shoves them off-screen
-             cleanly (this fixes the "feels resilient and stuck"
-             complaint). Far cacti get a softer kick so they stay
-             atmospheric. */
-          var depthBoost = c.tierZ > 1 ? 2.4 : (c.tierZ < -1 ? 0.6 : 1.0);
+          /* Strength multiplier by depth — equalised so far cacti are
+             as easy to push as close ones (the user's latest feedback).
+
+             Two effects need to cancel out:
+               (a) perspective foreshortening: a 1-unit world-space
+                   motion at z=-6 covers fewer screen pixels than a
+                   1-unit motion at z=+2.6, so the same world-kick
+                   *looks* slower for far cacti. We multiply by
+                   depthScale to compensate: far cacti get a bigger
+                   world-kick so the SCREEN motion matches.
+               (b) the original "atmospheric" damping (0.6× for far)
+                   is removed entirely — the user explicitly wants
+                   far cacti to push as easily as close ones.
+
+             Hero/close keep a small extra dramatic boost (×1.15) so a
+             nearby flick still feels punchy, but the gap between near
+             and far is now small enough that a thumb-tap moves any
+             cactus equally well. */
+          var depthBoost;
+          if (c.tierZ > 1) {
+            /* hero/close — keep the punchy feel the user already liked.
+               1.8 was the old close value and felt right; we keep it
+               as a floor. */
+            depthBoost = Math.max(1.8, depthScale * 1.8);
+          } else if (c.tierZ < -1) {
+            /* far/abyss — was 0.6 (too damped). Use depthScale (which
+               is >1 for these tiers) so the WORLD kick scales up enough
+               that the SCREEN motion matches what close cacti get,
+               cancelling perspective foreshortening. abyss (z=-6) ends
+               up at 2.2; far (z=-3.5) at 1.7 — both feel as easy as
+               close on a phone screen. */
+            depthBoost = depthScale;
+          } else {
+            depthBoost = 1.0;
+          }
           _v2.set(-mdx, -mdy, 0).divideScalar(md);
           var kick = Math.min(pSpeed * 3, 7) * ff;
           var str = (ff * BASE_PUSH + kick) * depthBoost * dt;
