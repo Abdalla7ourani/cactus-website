@@ -545,30 +545,31 @@ observer.observe(el);
 #connect-modal .connect-modal-panel.is-morphing{transition:left .6s cubic-bezier(.7,0,.15,1),top .6s cubic-bezier(.7,0,.15,1),width .6s cubic-bezier(.7,0,.15,1),height .6s cubic-bezier(.7,0,.15,1),border-radius .6s cubic-bezier(.7,0,.15,1),background-color .45s ease;}
 #connect-modal .connect-modal-panel.is-expanded{background-color:#0a0a0a;border-radius:clamp(1rem,2vw,2rem);}
 #connect-cta.is-morphed{opacity:0;pointer-events:none;}
-#connect-modal .connect-modal-header{display:flex;align-items:center;justify-content:space-between;gap:1rem;padding:clamp(1.25rem,2.5vw,2rem) clamp(1.25rem,3vw,2.5rem);border-bottom:1px solid var(--connect-border);opacity:0;pointer-events:none;transition:opacity .25s ease;}
+#connect-modal .connect-modal-header{display:flex;align-items:center;justify-content:space-between;gap:1rem;padding:clamp(1rem,2vw,1.5rem) clamp(1.25rem,3vw,2.5rem);border-bottom:1px solid var(--connect-border);opacity:0;pointer-events:none;transition:opacity .25s ease;flex:0 0 auto;}
 #connect-modal .connect-modal-panel.is-content-visible .connect-modal-header,
 #connect-modal .connect-modal-panel.is-content-visible .connect-modal-body{opacity:1;pointer-events:auto;}
-#connect-modal .connect-modal-title{font-family:'Aeonik',sans-serif;font-size:clamp(1.25rem,2.4vw,2rem);font-weight:700;letter-spacing:-.02em;margin:0;}
-#connect-modal .connect-modal-close{width:2.5rem;height:2.5rem;border-radius:9999px;border:1px solid var(--connect-border);background:transparent;color:#fff;display:inline-flex;align-items:center;justify-content:center;cursor:pointer;transition:background .3s ease,border-color .3s ease,transform .3s ease;}
+#connect-modal .connect-modal-title{font-family:'Aeonik',sans-serif;font-size:clamp(1.1rem,2vw,1.6rem);font-weight:700;letter-spacing:-.02em;margin:0;}
+#connect-modal .connect-modal-close{width:2.25rem;height:2.25rem;border-radius:9999px;border:1px solid var(--connect-border);background:transparent;color:#fff;display:inline-flex;align-items:center;justify-content:center;cursor:pointer;transition:background .3s ease,border-color .3s ease,transform .3s ease;flex:0 0 auto;}
 #connect-modal .connect-modal-close:hover{background:var(--connect-accent);border-color:var(--connect-accent);transform:rotate(90deg);}
-#connect-modal .connect-modal-body{padding:clamp(1.25rem,3vw,2.5rem);overflow-y:auto;opacity:0;pointer-events:none;transition:opacity .3s ease;}
-#connect-modal .connect-form{display:flex;flex-direction:column;gap:1.25rem;}
-#connect-modal .connect-row{display:grid;grid-template-columns:1fr;gap:1.25rem;}
-@media (min-width:48rem){#connect-modal .connect-row{grid-template-columns:1fr 1fr;}}
-#connect-modal .connect-field{display:flex;flex-direction:column;gap:.5rem;}
-#connect-modal .connect-label{font-family:'Aeonik',sans-serif;font-size:.75rem;font-weight:600;letter-spacing:.18em;text-transform:uppercase;color:var(--connect-muted);}
+#connect-modal .connect-modal-body{padding:clamp(1.1rem,2.4vw,1.85rem) clamp(1.25rem,3vw,2.5rem);overflow-y:auto;opacity:0;pointer-events:none;transition:opacity .3s ease;flex:1 1 auto;min-height:0;}
+#connect-modal .connect-form{display:flex;flex-direction:column;gap:.95rem;}
+#connect-modal .connect-row{display:grid;grid-template-columns:1fr;gap:.95rem;}
+@media (min-width:48rem){#connect-modal .connect-row{grid-template-columns:1fr 1fr;gap:1.1rem;}}
+#connect-modal .connect-field{display:flex;flex-direction:column;gap:.4rem;}
+#connect-modal .connect-label{font-family:'Aeonik',sans-serif;font-size:.7rem;font-weight:600;letter-spacing:.18em;text-transform:uppercase;color:var(--connect-muted);}
 #connect-modal .connect-label em{font-style:normal;color:#5a5a5a;font-weight:500;margin-left:.4rem;}
-#connect-modal .connect-input,#connect-modal .connect-textarea{width:100%;background:rgba(255,255,255,.03);border:1px solid var(--connect-border);border-radius:.75rem;padding:.875rem 1rem;font-family:'Aeonik',sans-serif;font-size:1rem;color:#fff;transition:border-color .3s ease,background .3s ease,box-shadow .3s ease;outline:none;}
+#connect-modal .connect-input,#connect-modal .connect-textarea{width:100%;background:rgba(255,255,255,.03);border:1px solid var(--connect-border);border-radius:.75rem;padding:.7rem .9rem;font-family:'Aeonik',sans-serif;font-size:.95rem;color:#fff;transition:border-color .3s ease,background .3s ease,box-shadow .3s ease;outline:none;}
 #connect-modal .connect-input:hover,#connect-modal .connect-textarea:hover{border-color:rgba(255,255,255,.18);}
 #connect-modal .connect-input:focus,#connect-modal .connect-textarea:focus{border-color:var(--connect-accent);background:rgba(255,57,74,.05);box-shadow:0 0 0 4px rgba(255,57,74,.12);}
-#connect-modal .connect-textarea{min-height:7rem;resize:vertical;font-family:inherit;}
-#connect-modal .connect-disclaimer{font-size:.75rem;color:var(--connect-muted);line-height:1.6;margin:0;}
+#connect-modal .connect-textarea{min-height:5rem;resize:vertical;font-family:inherit;}
+#connect-modal .connect-disclaimer{font-size:.7rem;color:var(--connect-muted);line-height:1.55;margin:.15rem 0 0;}
 #connect-modal .connect-disclaimer a{color:#fff;text-decoration:underline;text-underline-offset:2px;}
-#connect-modal .connect-submit{align-self:flex-start;display:inline-flex;align-items:center;gap:.75rem;border:none;background:var(--connect-accent);color:#fff;border-radius:9999px;padding:.95rem 1.75rem;font-family:'Aeonik',sans-serif;font-size:1rem;font-weight:600;letter-spacing:-.01em;cursor:pointer;transition:transform .3s ease,box-shadow .3s ease;box-shadow:0 8px 24px rgba(255,57,74,.25);}
+#connect-modal .connect-submit{align-self:flex-start;display:inline-flex;align-items:center;gap:.65rem;border:none;background:var(--connect-accent);color:#fff;border-radius:9999px;padding:.8rem 1.6rem;font-family:'Aeonik',sans-serif;font-size:.95rem;font-weight:600;letter-spacing:-.01em;cursor:pointer;transition:transform .3s ease,box-shadow .3s ease;box-shadow:0 8px 24px rgba(255,57,74,.25);}
 #connect-modal .connect-submit:hover{transform:translateY(-2px);box-shadow:0 16px 40px rgba(255,57,74,.4);}
 #connect-modal .connect-submit svg{width:1em;height:1em;transition:transform .3s ease;}
 #connect-modal .connect-submit:hover svg{transform:translateX(4px);}
 body.connect-modal-open{overflow:hidden;}
+html.connect-modal-open{overflow:hidden;}
 
 @media (max-width:48rem){
 #connect .connect-cta-pill{font-size:clamp(1.5rem,7.5vw,2.6rem);padding:1rem 1.5rem;}
@@ -618,7 +619,7 @@ body.connect-modal-open{overflow:hidden;}
           <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" aria-hidden="true"><line x1="4" y1="4" x2="20" y2="20"/><line x1="20" y1="4" x2="4" y2="20"/></svg>
         </button>
       </div>
-      <div class="connect-modal-body">
+      <div class="connect-modal-body" data-lenis-prevent>
         <form class="connect-form" id="connect-form" novalidate>
           <div class="connect-row">
             <label class="connect-field">
@@ -740,8 +741,10 @@ body.connect-modal-open{overflow:hidden;}
   var panel = modal.querySelector('.connect-modal-panel');
   var morphing = false;
   function getFinalRect(){
-    var maxW = Math.min(window.innerWidth - 32, 56 * 16);
-    var maxH = Math.min(window.innerHeight - 32, 640);
+    // Cap width/height generously so the form fits without scrolling on
+    // typical laptop viewports while still leaving a comfortable margin.
+    var maxW = Math.min(window.innerWidth - 32, 1040);
+    var maxH = Math.min(window.innerHeight - 32, 820);
     return {
       left: (window.innerWidth - maxW) / 2,
       top: (window.innerHeight - maxH) / 2,
@@ -755,24 +758,54 @@ body.connect-modal-open{overflow:hidden;}
     panel.style.width = r.width + 'px';
     panel.style.height = r.height + 'px';
   }
+  // Bullet-proof scroll lock: instead of relying on overflow:hidden alone
+  // (which can reset scroll on this layout), pin the body via position:fixed
+  // and a negative top offset. This keeps the visible page exactly where
+  // the user left it, so the morph anchors to the actual on-screen pill and
+  // the close animation reverses to the same spot.
+  var lockedScrollY = 0;
+  function lockScroll(){
+    lockedScrollY = window.scrollY || window.pageYOffset || 0;
+    var sbw = window.innerWidth - document.documentElement.clientWidth;
+    document.documentElement.classList.add('connect-modal-open');
+    document.body.classList.add('connect-modal-open');
+    document.body.style.position = 'fixed';
+    document.body.style.top = (-lockedScrollY) + 'px';
+    document.body.style.left = '0';
+    document.body.style.right = '0';
+    document.body.style.width = '100%';
+    if(sbw > 0) document.body.style.paddingRight = sbw + 'px';
+  }
+  function unlockScroll(){
+    document.documentElement.classList.remove('connect-modal-open');
+    document.body.classList.remove('connect-modal-open');
+    document.body.style.position = '';
+    document.body.style.top = '';
+    document.body.style.left = '';
+    document.body.style.right = '';
+    document.body.style.width = '';
+    document.body.style.paddingRight = '';
+    window.scrollTo(0, lockedScrollY);
+  }
   var contentTimer = null;
   function openModal(){
     if(morphing) return;
     morphing = true;
     if(contentTimer) clearTimeout(contentTimer);
+    // Capture the pill's on-screen rect FIRST, before locking scroll, so the
+    // morph starts exactly where the button is visually.
     var pillRect = cta.getBoundingClientRect();
-    // Start at the pill's exact rect with no transition active
     panel.classList.remove('is-morphing','is-expanded','is-content-visible');
     setRect(pillRect);
     void panel.offsetHeight; // flush layout so the start state is committed
-    // Make the modal layer visible (backdrop fades in via [data-open] CSS)
+    // Lock scroll AFTER recording the pill rect; with position:fixed body
+    // pinning, the visible viewport doesn't shift, so the rect is still
+    // valid for the close animation later.
+    lockScroll();
     modal.dataset.open = 'true';
     modal.setAttribute('aria-hidden','false');
     cta.setAttribute('aria-expanded','true');
-    document.body.classList.add('connect-modal-open');
-    // Hide the original pill so the morphing panel appears to BE the pill
     cta.classList.add('is-morphed');
-    // Enable transition then expand on the next frame
     panel.classList.add('is-morphing');
     requestAnimationFrame(function(){
       requestAnimationFrame(function(){
@@ -780,8 +813,6 @@ body.connect-modal-open{overflow:hidden;}
         panel.classList.add('is-expanded');
       });
     });
-    // Reveal the form content slightly before the morph completes so the
-    // panel and content land at the same time
     contentTimer = setTimeout(function(){
       panel.classList.add('is-content-visible');
     }, 380);
@@ -798,24 +829,25 @@ body.connect-modal-open{overflow:hidden;}
     morphing = true;
     if(contentTimer) clearTimeout(contentTimer);
     cta.setAttribute('aria-expanded','false');
-    // Fade the form content out first
+    // Fade form content out first.
     panel.classList.remove('is-content-visible');
-    // After a short pause, start morphing the panel back to the pill rect.
-    // The pause gives the form time to fade out before the panel shrinks
-    // around it, mirroring the open animation in reverse.
+    // After a short pause, morph the panel back to the pill's rect.
     contentTimer = setTimeout(function(){
       panel.classList.remove('is-expanded');
+      // Recapture: the pill is in the same visible spot because scroll is
+      // still locked at lockedScrollY, so getBoundingClientRect is correct.
       var pillRect = cta.getBoundingClientRect();
       setRect(pillRect);
     }, 160);
-    // After the morph completes, fully tear down modal state
     setTimeout(function(){
       modal.dataset.open = 'false';
       modal.setAttribute('aria-hidden','true');
-      document.body.classList.remove('connect-modal-open');
       panel.classList.remove('is-morphing');
       panel.style.cssText = '';
       cta.classList.remove('is-morphed');
+      // Restore scroll AFTER the morph fully completes so the user lands
+      // exactly where they were before opening the modal.
+      unlockScroll();
       cta.focus({preventScroll:true});
       morphing = false;
     }, 820);
