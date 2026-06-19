@@ -516,9 +516,9 @@ observer.observe(el);
 #connect .connect-cta-pill:active{transform:scale(.985);}
 #connect .connect-cta-pill:focus-visible{outline:2px solid var(--connect-accent);outline-offset:6px;}
 #connect .connect-cta-text{position:relative;z-index:1;background:linear-gradient(180deg,#fff 0%,#cfcfcf 100%);-webkit-background-clip:text;background-clip:text;color:transparent;}
-#connect .connect-cta-badge{position:fixed;top:0;left:0;width:clamp(7rem,11vw,9.5rem);height:clamp(7rem,11vw,9.5rem);display:flex;align-items:center;justify-content:center;background:var(--connect-accent);color:#fff;border-radius:50%;opacity:0;transform:translate(-50%,-50%) scale(.5);transition:opacity .35s cubic-bezier(.16,1,.3,1),transform .55s cubic-bezier(.16,1,.3,1);z-index:60;font-family:'Aeonik',sans-serif;font-size:clamp(.7rem,.95vw,.95rem);font-weight:700;letter-spacing:.06em;text-transform:uppercase;pointer-events:none;will-change:transform,opacity;box-shadow:0 12px 40px rgba(255,57,74,.35),0 0 0 0 rgba(255,57,74,.4);}
-#connect .connect-cta-badge.is-visible{opacity:1;transform:translate(-50%,-50%) scale(1);}
-#connect .connect-cta-badge::before{content:"+";position:absolute;top:18%;left:50%;transform:translateX(-50%);font-size:1.1em;font-weight:300;opacity:.85;}
+.connect-cta-badge{position:fixed;top:0;left:0;width:clamp(7rem,11vw,9.5rem);height:clamp(7rem,11vw,9.5rem);display:flex;align-items:center;justify-content:center;background:#FF394A;color:#fff;border-radius:50%;opacity:0;transform:translate3d(-50%,-50%,0) scale(.5);transition:opacity .35s cubic-bezier(.16,1,.3,1),transform .55s cubic-bezier(.16,1,.3,1);z-index:60;font-family:'Aeonik',sans-serif;font-size:clamp(.7rem,.95vw,.95rem);font-weight:700;letter-spacing:.06em;text-transform:uppercase;pointer-events:none;will-change:transform,opacity,left,top;box-shadow:0 12px 40px rgba(255,57,74,.35),0 0 0 0 rgba(255,57,74,.4);}
+.connect-cta-badge.is-visible{opacity:1;transform:translate3d(-50%,-50%,0) scale(1);}
+.connect-cta-badge::before{content:"+";position:absolute;top:18%;left:50%;transform:translateX(-50%);font-size:1.1em;font-weight:300;opacity:.85;}
 #connect .connect-email-pill{position:relative;display:inline-flex;align-items:center;gap:.65rem;text-decoration:none;color:#fff;background:var(--connect-accent);border-radius:9999px;padding:.875rem 1.5rem;font-family:'Aeonik',sans-serif;font-size:clamp(.875rem,1.1vw,1rem);font-weight:600;letter-spacing:-.01em;transition:transform .4s cubic-bezier(.16,1,.3,1),box-shadow .4s cubic-bezier(.16,1,.3,1),background .4s cubic-bezier(.16,1,.3,1);box-shadow:0 8px 24px rgba(255,57,74,.18);}
 #connect .connect-email-pill:hover{transform:translateY(-2px);box-shadow:0 14px 36px rgba(255,57,74,.32);}
 #connect .connect-email-pill svg{width:1em;height:1em;transition:transform .4s cubic-bezier(.16,1,.3,1);}
@@ -563,7 +563,7 @@ body.connect-modal-open{overflow:hidden;}
 
 @media (max-width:48rem){
 #connect .connect-cta-pill{font-size:clamp(1.5rem,7.5vw,2.6rem);padding:1rem 1.5rem;}
-#connect .connect-cta-badge{display:none!important;}
+.connect-cta-badge{display:none!important;}
 }
 @media (prefers-reduced-motion:reduce){
 #connect *,#connect-modal *{transition-duration:.01ms!important;animation-duration:.01ms!important;}
@@ -656,12 +656,51 @@ body.connect-modal-open{overflow:hidden;}
   var modal=document.getElementById('connect-modal');
   var form=document.getElementById('connect-form');
   if(!cta||!badge||!modal)return;
+  // Re-parent badge and modal to <body> so position:fixed is anchored to the
+  // viewport even when an ancestor has transform/will-change/filter applied
+  // (which makes "fixed" become containing-block-relative in modern browsers).
+  function reparentToBody(el){
+    if(el && el.parentNode !== document.body){
+      document.body.appendChild(el);
+    }
+  }
+  reparentToBody(badge);
+  reparentToBody(modal);
+  // The site applies transforms to ancestor elements (GSAP scrolltrigger,
+  // smooth-scroll etc.), which turns position:fixed into a containing-block
+  // relative to that transformed ancestor instead of the viewport. To still
+  // anchor the badge to the cursor we measure where left/top:0 actually
+  // resolves in viewport coords and subtract that offset.
+  var fixedOffset = {x:0, y:0};
+  function measureFixedOffset(){
+    var prevTransition = badge.style.transition;
+    var prevLeft = badge.style.left;
+    var prevTop = badge.style.top;
+    badge.style.transition = 'none';
+    badge.style.left = '0px';
+    badge.style.top = '0px';
+    // Force a synchronous layout read
+    var r = badge.getBoundingClientRect();
+    // Badge has a translate(-50%,-50%) transform, so (left:0, top:0) places
+    // its center at the containing block's origin. r.left/r.top describe
+    // where that origin sits in the viewport.
+    fixedOffset.x = r.left + r.width / 2;
+    fixedOffset.y = r.top + r.height / 2;
+    badge.style.left = prevLeft;
+    badge.style.top = prevTop;
+    // Force another reflow so the next transition starts from the right state
+    void badge.offsetHeight;
+    badge.style.transition = prevTransition;
+  }
+  function place(x, y){
+    badge.style.left = (x - fixedOffset.x) + 'px';
+    badge.style.top  = (y - fixedOffset.y) + 'px';
+  }
   var targetX=0,targetY=0,curX=0,curY=0,raf=null,active=false;
   function loop(){
     curX += (targetX - curX) * 0.18;
     curY += (targetY - curY) * 0.18;
-    badge.style.left = curX + 'px';
-    badge.style.top = curY + 'px';
+    place(curX, curY);
     if(active || Math.abs(targetX-curX) > .5 || Math.abs(targetY-curY) > .5){
       raf = requestAnimationFrame(loop);
     }else{
@@ -674,8 +713,9 @@ body.connect-modal-open{overflow:hidden;}
   }
   function onEnter(e){
     active = true;
+    measureFixedOffset();
     targetX = curX = e.clientX; targetY = curY = e.clientY;
-    badge.style.left = curX + 'px'; badge.style.top = curY + 'px';
+    place(curX, curY);
     badge.classList.add('is-visible');
     cta.classList.add('is-hovering');
     if(!raf) raf = requestAnimationFrame(loop);
