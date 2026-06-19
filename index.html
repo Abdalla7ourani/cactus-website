@@ -532,17 +532,21 @@ observer.observe(el);
 #connect .connect-bg-glow.two{bottom:-15%;right:-10%;background:radial-gradient(circle,#5FAD41 0%,transparent 60%);}
 #connect .connect-inner > *{position:relative;z-index:1;}
 
-#connect-modal{position:fixed;inset:0;z-index:200;display:flex;align-items:center;justify-content:center;padding:clamp(.75rem,2vw,2rem);pointer-events:none;visibility:hidden;}
+#connect-modal{position:fixed;inset:0;z-index:200;pointer-events:none;visibility:hidden;}
 #connect-modal[data-open="true"]{pointer-events:auto;visibility:visible;}
 #connect-modal .connect-modal-backdrop{position:absolute;inset:0;background:rgba(0,0,0,.65);backdrop-filter:blur(18px);-webkit-backdrop-filter:blur(18px);opacity:0;transition:opacity .45s cubic-bezier(.16,1,.3,1);border:none;cursor:pointer;}
 #connect-modal[data-open="true"] .connect-modal-backdrop{opacity:1;}
-#connect-modal .connect-modal-panel{position:relative;width:min(56rem,100%);max-height:min(92svh,52rem);background:#0a0a0a;color:#fff;border:1px solid var(--connect-border);border-radius:clamp(1rem,2vw,2rem);overflow:hidden;display:flex;flex-direction:column;transform:scale(.92) translateY(20px);opacity:0;transition:transform .55s cubic-bezier(.16,1,.3,1),opacity .45s cubic-bezier(.16,1,.3,1);box-shadow:0 30px 80px rgba(0,0,0,.5);}
-#connect-modal[data-open="true"] .connect-modal-panel{transform:scale(1) translateY(0);opacity:1;}
-#connect-modal .connect-modal-header{display:flex;align-items:center;justify-content:space-between;gap:1rem;padding:clamp(1.25rem,2.5vw,2rem) clamp(1.25rem,3vw,2.5rem);border-bottom:1px solid var(--connect-border);}
+#connect-modal .connect-modal-panel{position:fixed;left:0;top:0;width:0;height:0;background:#1a1a1a;color:#fff;border:1px solid var(--connect-border);border-radius:9999px;overflow:hidden;display:flex;flex-direction:column;box-shadow:0 30px 80px rgba(0,0,0,.5);will-change:left,top,width,height,border-radius,background-color;}
+#connect-modal .connect-modal-panel.is-morphing{transition:left .6s cubic-bezier(.7,0,.15,1),top .6s cubic-bezier(.7,0,.15,1),width .6s cubic-bezier(.7,0,.15,1),height .6s cubic-bezier(.7,0,.15,1),border-radius .6s cubic-bezier(.7,0,.15,1),background-color .45s ease;}
+#connect-modal .connect-modal-panel.is-expanded{background-color:#0a0a0a;border-radius:clamp(1rem,2vw,2rem);}
+#connect-cta.is-morphed{opacity:0;pointer-events:none;}
+#connect-modal .connect-modal-header{display:flex;align-items:center;justify-content:space-between;gap:1rem;padding:clamp(1.25rem,2.5vw,2rem) clamp(1.25rem,3vw,2.5rem);border-bottom:1px solid var(--connect-border);opacity:0;pointer-events:none;transition:opacity .25s ease;}
+#connect-modal .connect-modal-panel.is-content-visible .connect-modal-header,
+#connect-modal .connect-modal-panel.is-content-visible .connect-modal-body{opacity:1;pointer-events:auto;}
 #connect-modal .connect-modal-title{font-family:'Aeonik',sans-serif;font-size:clamp(1.25rem,2.4vw,2rem);font-weight:700;letter-spacing:-.02em;margin:0;}
 #connect-modal .connect-modal-close{width:2.5rem;height:2.5rem;border-radius:9999px;border:1px solid var(--connect-border);background:transparent;color:#fff;display:inline-flex;align-items:center;justify-content:center;cursor:pointer;transition:background .3s ease,border-color .3s ease,transform .3s ease;}
 #connect-modal .connect-modal-close:hover{background:var(--connect-accent);border-color:var(--connect-accent);transform:rotate(90deg);}
-#connect-modal .connect-modal-body{padding:clamp(1.25rem,3vw,2.5rem);overflow-y:auto;}
+#connect-modal .connect-modal-body{padding:clamp(1.25rem,3vw,2.5rem);overflow-y:auto;opacity:0;pointer-events:none;transition:opacity .3s ease;}
 #connect-modal .connect-form{display:flex;flex-direction:column;gap:1.25rem;}
 #connect-modal .connect-row{display:grid;grid-template-columns:1fr;gap:1.25rem;}
 @media (min-width:48rem){#connect-modal .connect-row{grid-template-columns:1fr 1fr;}}
@@ -728,23 +732,94 @@ body.connect-modal-open{overflow:hidden;}
   cta.addEventListener('mouseenter', onEnter);
   cta.addEventListener('mouseleave', onLeave);
   cta.addEventListener('mousemove', onMove);
+  var panel = modal.querySelector('.connect-modal-panel');
+  var morphing = false;
+  function getFinalRect(){
+    var maxW = Math.min(window.innerWidth - 32, 56 * 16);
+    var maxH = Math.min(window.innerHeight - 32, 640);
+    return {
+      left: (window.innerWidth - maxW) / 2,
+      top: (window.innerHeight - maxH) / 2,
+      width: maxW,
+      height: maxH
+    };
+  }
+  function setRect(r){
+    panel.style.left = r.left + 'px';
+    panel.style.top = r.top + 'px';
+    panel.style.width = r.width + 'px';
+    panel.style.height = r.height + 'px';
+  }
+  var contentTimer = null;
   function openModal(){
-    modal.dataset.open='true';
+    if(morphing) return;
+    morphing = true;
+    if(contentTimer) clearTimeout(contentTimer);
+    var pillRect = cta.getBoundingClientRect();
+    // Start at the pill's exact rect with no transition active
+    panel.classList.remove('is-morphing','is-expanded','is-content-visible');
+    setRect(pillRect);
+    void panel.offsetHeight; // flush layout so the start state is committed
+    // Make the modal layer visible (backdrop fades in via [data-open] CSS)
+    modal.dataset.open = 'true';
     modal.setAttribute('aria-hidden','false');
     cta.setAttribute('aria-expanded','true');
     document.body.classList.add('connect-modal-open');
+    // Hide the original pill so the morphing panel appears to BE the pill
+    cta.classList.add('is-morphed');
+    // Enable transition then expand on the next frame
+    panel.classList.add('is-morphing');
+    requestAnimationFrame(function(){
+      requestAnimationFrame(function(){
+        setRect(getFinalRect());
+        panel.classList.add('is-expanded');
+      });
+    });
+    // Reveal the form content slightly before the morph completes so the
+    // panel and content land at the same time
+    contentTimer = setTimeout(function(){
+      panel.classList.add('is-content-visible');
+    }, 380);
     setTimeout(function(){
-      var first = modal.querySelector('input[name="first_name"]');
-      if(first) first.focus();
-    },300);
+      morphing = false;
+      if(modal.dataset.open === 'true'){
+        var first = modal.querySelector('input[name="first_name"]');
+        if(first) first.focus({preventScroll:true});
+      }
+    }, 720);
   }
   function closeModal(){
-    modal.dataset.open='false';
-    modal.setAttribute('aria-hidden','true');
+    if(morphing) return;
+    morphing = true;
+    if(contentTimer) clearTimeout(contentTimer);
     cta.setAttribute('aria-expanded','false');
-    document.body.classList.remove('connect-modal-open');
-    cta.focus();
+    // Fade the form content out first
+    panel.classList.remove('is-content-visible');
+    // After a short pause, start morphing the panel back to the pill rect.
+    // The pause gives the form time to fade out before the panel shrinks
+    // around it, mirroring the open animation in reverse.
+    contentTimer = setTimeout(function(){
+      panel.classList.remove('is-expanded');
+      var pillRect = cta.getBoundingClientRect();
+      setRect(pillRect);
+    }, 160);
+    // After the morph completes, fully tear down modal state
+    setTimeout(function(){
+      modal.dataset.open = 'false';
+      modal.setAttribute('aria-hidden','true');
+      document.body.classList.remove('connect-modal-open');
+      panel.classList.remove('is-morphing');
+      panel.style.cssText = '';
+      cta.classList.remove('is-morphed');
+      cta.focus({preventScroll:true});
+      morphing = false;
+    }, 820);
   }
+  window.addEventListener('resize', function(){
+    if(modal.dataset.open === 'true' && panel.classList.contains('is-expanded')){
+      setRect(getFinalRect());
+    }
+  });
   cta.addEventListener('click', openModal);
   modal.querySelectorAll('[data-connect-close]').forEach(function(el){ el.addEventListener('click', closeModal); });
   document.addEventListener('keydown', function(e){
