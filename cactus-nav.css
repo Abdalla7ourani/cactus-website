@@ -1,0 +1,90 @@
+/* Cactus mobile nav drawer + desktop BIM link fix */
+
+@media (max-width: 1023px) {
+  /* Legacy accordion panel is clipped inside fixed-height nav — hide it on mobile */
+  #navigation .absolute.-z-1 {
+    display: none !important;
+  }
+
+  #navigation.opened {
+    z-index: 101 !important;
+  }
+
+  html.scroll-disabled {
+    overflow: hidden;
+  }
+
+  #cactus-mobile-drawer {
+    position: fixed;
+    top: var(--navbar-height, 5rem);
+    left: 0;
+    right: 0;
+    z-index: 102;
+    padding: 1px;
+    background: #0a0a0a;
+    pointer-events: none;
+    visibility: hidden;
+    opacity: 0;
+    transform: translateY(-0.5rem);
+    transition:
+      opacity 0.35s var(--ease-out-cubic, cubic-bezier(0.16, 1, 0.3, 1)),
+      transform 0.45s var(--ease-in-out-cubic, cubic-bezier(0.76, 0, 0.24, 1)),
+      visibility 0s 0.35s;
+  }
+
+  html.dark #cactus-mobile-drawer {
+    background: #262626;
+  }
+
+  #cactus-mobile-drawer.is-open {
+    pointer-events: auto;
+    visibility: visible;
+    opacity: 1;
+    transform: translateY(0);
+    transition-delay: 0s;
+  }
+
+  .cactus-mobile-drawer-panel {
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+    padding-bottom: 0.75rem;
+  }
+
+  .cactus-mobile-drawer-link {
+    display: block;
+    padding: 1rem 1.25rem;
+    background: #fff;
+    color: #000;
+    text-decoration: none;
+    font-family: "Aeonik", sans-serif;
+    font-size: 1.125rem;
+    font-weight: 600;
+    line-height: 1.5;
+    border-radius: 1rem;
+    transition: color 0.2s ease;
+  }
+
+  html.dark .cactus-mobile-drawer-link {
+    background: #0a0a0a;
+    color: #fff;
+  }
+
+  .cactus-mobile-drawer-link:active,
+  .cactus-mobile-drawer-link:focus-visible {
+    color: #ff394a;
+    outline: none;
+  }
+}
+
+@media (min-width: 1024px) {
+  #cactus-mobile-drawer {
+    display: none !important;
+  }
+
+  #navigation li.bim a {
+    position: relative;
+    z-index: 5;
+    pointer-events: auto;
+  }
+}
