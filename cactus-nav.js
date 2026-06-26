@@ -10,20 +10,53 @@
   ];
 
   function isMobile() {
-    return window.innerWidth < 1024;
+    return window.matchMedia("(max-width: 1023px)").matches;
+  }
+
+  function getNavHeight() {
+    var nav = document.getElementById("navigation");
+    if (!nav) return 80;
+    return nav.getBoundingClientRect().height || 80;
+  }
+
+  function positionDrawer() {
+    var drawer = document.getElementById("cactus-mobile-drawer");
+    if (!drawer) return;
+    drawer.style.setProperty("--cactus-nav-top", getNavHeight() + "px");
+  }
+
+  function setMenuOpen(open) {
+    var nav = document.getElementById("navigation");
+    var overlay = document.getElementById("overlay");
+    var drawer = document.getElementById("cactus-mobile-drawer");
+    var btn = document.getElementById("toggle-menu-button");
+
+    if (drawer) {
+      drawer.classList.toggle("is-open", open);
+      drawer.setAttribute("aria-hidden", open ? "false" : "true");
+    }
+    if (nav) nav.classList.toggle("opened", open);
+    if (overlay) overlay.classList.toggle("visible", open);
+    document.documentElement.classList.toggle("scroll-disabled", open);
+    if (btn) btn.setAttribute("aria-expanded", open ? "true" : "false");
+
+    if (open) {
+      positionDrawer();
+      document.querySelectorAll(".accordion.opened").forEach(function (el) {
+        el.classList.remove("opened");
+      });
+    }
   }
 
   function closeMenu() {
-    var nav = document.getElementById("navigation");
-    var overlay = document.getElementById("overlay");
-    if (nav) nav.classList.remove("opened");
-    if (overlay) overlay.classList.remove("visible");
-    document.documentElement.classList.remove("scroll-disabled");
+    setMenuOpen(false);
+  }
+
+  function toggleMenu() {
+    if (!isMobile()) return;
     var drawer = document.getElementById("cactus-mobile-drawer");
-    if (drawer) {
-      drawer.classList.remove("is-open");
-      drawer.setAttribute("aria-hidden", "true");
-    }
+    var open = !(drawer && drawer.classList.contains("is-open"));
+    setMenuOpen(open);
   }
 
   function navigate(path) {
@@ -39,10 +72,10 @@
       var el = document.getElementById(hash);
       if (el) {
         closeMenu();
-        setTimeout(function () {
+        window.setTimeout(function () {
           el.scrollIntoView({ behavior: "smooth", block: "start" });
           if (history.replaceState) history.replaceState(null, "", "#" + hash);
-        }, 50);
+        }, 80);
         return;
       }
     }
@@ -57,17 +90,23 @@
     drawer.id = "cactus-mobile-drawer";
     drawer.setAttribute("aria-hidden", "true");
     drawer.innerHTML =
-      '<div class="cactus-mobile-drawer-panel" role="menu">' +
-      ITEMS.map(function (item) {
+      '<div class="cactus-mobile-drawer-shell">' +
+      '<div class="cactus-mobile-drawer-panel" role="menu" aria-label="Site navigation">' +
+      ITEMS.map(function (item, i) {
         return (
           '<a href="' +
           item.href +
-          '" class="cactus-mobile-drawer-link" role="menuitem">' +
+          '" class="cactus-mobile-drawer-link" role="menuitem" style="--i:' +
+          i +
+          '">' +
+          '<span class="cactus-mobile-drawer-link-text">' +
           item.label +
+          "</span>" +
+          '<span class="cactus-mobile-drawer-link-arrow" aria-hidden="true"></span>' +
           "</a>"
         );
       }).join("") +
-      "</div>";
+      "</div></div>";
 
     document.body.appendChild(drawer);
 
@@ -81,32 +120,49 @@
     });
   }
 
-  function syncDrawer() {
-    var nav = document.getElementById("navigation");
-    var drawer = document.getElementById("cactus-mobile-drawer");
-    if (!nav || !drawer) return;
+  function bindMobileToggle() {
+    var btn = document.getElementById("toggle-menu-button");
+    if (!btn || btn.dataset.cactusBound) return;
+    btn.dataset.cactusBound = "1";
+    btn.setAttribute("aria-expanded", "false");
+    btn.setAttribute("aria-controls", "cactus-mobile-drawer");
 
-    if (!isMobile()) {
-      drawer.classList.remove("is-open");
-      drawer.setAttribute("aria-hidden", "true");
-      return;
-    }
+    btn.addEventListener(
+      "click",
+      function (e) {
+        if (!isMobile()) return;
+        e.preventDefault();
+        e.stopImmediatePropagation();
+        toggleMenu();
+      },
+      true
+    );
+  }
 
-    var open = nav.classList.contains("opened");
-    drawer.classList.toggle("is-open", open);
-    drawer.setAttribute("aria-hidden", open ? "false" : "true");
+  function bindOverlay() {
+    var overlay = document.getElementById("overlay");
+    if (!overlay || overlay.dataset.cactusBound) return;
+    overlay.dataset.cactusBound = "1";
+
+    overlay.addEventListener(
+      "click",
+      function () {
+        if (!isMobile()) return;
+        closeMenu();
+      },
+      true
+    );
   }
 
   function bindBimLinks() {
     document.addEventListener(
       "click",
       function (e) {
+        if (isMobile()) return;
         var link = e.target.closest(
           '#navigation li.bim a[href], a[href="/bim/"], a[href="/bim"]'
         );
-        if (!link) return;
-        if (link.closest("#cactus-mobile-drawer")) return;
-
+        if (!link || link.closest("#cactus-mobile-drawer")) return;
         e.preventDefault();
         e.stopImmediatePropagation();
         navigate(link.getAttribute("href") || "/bim/");
@@ -117,25 +173,19 @@
 
   function init() {
     buildDrawer();
+    bindMobileToggle();
+    bindOverlay();
     bindBimLinks();
+    positionDrawer();
 
-    var nav = document.getElementById("navigation");
-    if (nav) {
-      new MutationObserver(syncDrawer).observe(nav, {
-        attributes: true,
-        attributeFilter: ["class"],
-      });
-    }
+    window.addEventListener("resize", function () {
+      positionDrawer();
+      if (!isMobile()) closeMenu();
+    });
 
-    var overlay = document.getElementById("overlay");
-    if (overlay) {
-      overlay.addEventListener("click", function () {
-        syncDrawer();
-      });
-    }
-
-    window.addEventListener("resize", syncDrawer);
-    syncDrawer();
+    window.addEventListener("orientationchange", function () {
+      window.setTimeout(positionDrawer, 120);
+    });
   }
 
   if (document.readyState === "loading") {
