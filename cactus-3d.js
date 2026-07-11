@@ -1143,46 +1143,53 @@ import * as THREE from "https://cdn.jsdelivr.net/npm/three@0.162.0/build/three.m
   /* ================================================================== */
 
   /* 2K detail normal map — finer cell density and stronger relief than
-     SKIN_MAPS, pre-built once at module load. */
-  function _buildUltraNormalMap() {
-    var SIZE = 2048;
-    var cv = document.createElement("canvas");
-    cv.width = cv.height = SIZE;
-    var ctx = cv.getContext("2d");
-    var img = ctx.createImageData(SIZE, SIZE);
-    var d = img.data;
+     SKIN_MAPS. Built once, then shared/cloned by every ultra cactus.
 
-    /* Height field: very dense cuticle pebbles + medium mottling +
-       sharper sun-stress crackle. Each layer is tileable so the map
-       wraps without seams. */
-    function H(x, y) {
-      var nx = x / SIZE, ny = y / SIZE;
-      /* Dense cuticle pebbles — 4 octaves of high-freq fbm. */
-      var cells = _fbm2(nx, ny, 140, 4);
-      cells = Math.pow(cells, 0.78);
-      /* Mid mottling — wax thickness variation. */
-      var mott = _fbm2(nx + 11.7, ny + 3.3, 12, 4);
-      /* Sun-stress crackle — sharp thin lines, simulated by the
-         derivative of fbm having abrupt jumps. */
-      var crackle = _fbm2(nx + 7.1, ny + 1.9, 40, 2);
-      crackle = Math.pow(crackle, 2.2);
-      /* Lenticel striations — slightly off-horizontal so they don't
-         look like a stripe pattern. */
-      var stria = 0.5 + 0.5 * Math.sin(ny * 320 + mott * 8.0 + cells * 1.3);
-      var h = cells * 0.62 + mott * 0.18 + crackle * 0.12 + stria * 0.08;
-      return h;
-    }
+     PERF NOTE — this used to be the cause of a hard, multi-second page
+     freeze roughly 10-15s after load. The height field samples ~40 fbm
+     octaves PER pixel and each fbm octave does 4 value-noise taps, each
+     tap being 4 Math.sin() hashes. At 2048×2048 that works out to on the
+     order of HALF A BILLION Math.sin() calls. Running that in a single
+     synchronous pass pins the main thread for several seconds, stalling
+     the render loop and the iridescent card's shader — exactly the
+     "freezes then recovers" symptom. It "recovered" simply because the
+     bake finished (it's a one-shot) and is cached forever after.
 
-    /* Tablet-grade strength so the bumps are clearly readable from
-       camera distance without going cartoonish. */
-    var STRENGTH = 22;
-    for (var y = 0; y < SIZE; y++) {
+     The fix: the real build is now TIME-SLICED across idle windows (see
+     _buildUltraNormalMapAsync) — a few scanlines per slice, bounded by a
+     millisecond budget, so the main thread stays responsive throughout.
+     Output is pixel-for-pixel identical to the old synchronous bake. The
+     synchronous _buildUltraNormalMap below is retained only as a
+     correctness fallback for the (practically impossible) case where an
+     ultra cactus needs the map before the sliced bake has finished. */
+  var _ULTRA_SIZE = 2048;
+  var _ULTRA_STRENGTH = 22;
+
+  /* Tileable height field — dense cuticle pebbles + mid mottling +
+     sun-stress crackle + faint lenticel striations. Shared by both the
+     sync and sliced builders so the result is identical either way. */
+  function _ultraHeight(x, y) {
+    var SIZE = _ULTRA_SIZE;
+    var nx = x / SIZE, ny = y / SIZE;
+    var cells = _fbm2(nx, ny, 140, 4);
+    cells = Math.pow(cells, 0.78);
+    var mott = _fbm2(nx + 11.7, ny + 3.3, 12, 4);
+    var crackle = _fbm2(nx + 7.1, ny + 1.9, 40, 2);
+    crackle = Math.pow(crackle, 2.2);
+    var stria = 0.5 + 0.5 * Math.sin(ny * 320 + mott * 8.0 + cells * 1.3);
+    return cells * 0.62 + mott * 0.18 + crackle * 0.12 + stria * 0.08;
+  }
+
+  /* Fill scanlines [y0, y1) of the RGBA normal buffer `d`. */
+  function _ultraFillRows(d, y0, y1) {
+    var SIZE = _ULTRA_SIZE, STRENGTH = _ULTRA_STRENGTH;
+    for (var y = y0; y < y1; y++) {
       for (var x = 0; x < SIZE; x++) {
         var i = (y * SIZE + x) * 4;
-        var hl = H((x - 1 + SIZE) % SIZE, y);
-        var hr = H((x + 1) % SIZE, y);
-        var hu = H(x, (y - 1 + SIZE) % SIZE);
-        var hd = H(x, (y + 1) % SIZE);
+        var hl = _ultraHeight((x - 1 + SIZE) % SIZE, y);
+        var hr = _ultraHeight((x + 1) % SIZE, y);
+        var hu = _ultraHeight(x, (y - 1 + SIZE) % SIZE);
+        var hd = _ultraHeight(x, (y + 1) % SIZE);
         var dx = (hr - hl) * STRENGTH;
         var dy = (hd - hu) * STRENGTH;
         var nz = 1.0;
@@ -1193,7 +1200,9 @@ import * as THREE from "https://cdn.jsdelivr.net/npm/three@0.162.0/build/three.m
         d[i + 3] = 255;
       }
     }
-    ctx.putImageData(img, 0, 0);
+  }
+
+  function _finishUltraTexture(cv) {
     var t = new THREE.CanvasTexture(cv);
     t.wrapS = t.wrapT = THREE.RepeatWrapping;
     t.anisotropy = 8;
@@ -1201,24 +1210,113 @@ import * as THREE from "https://cdn.jsdelivr.net/npm/three@0.162.0/build/three.m
     t.needsUpdate = true;
     return t;
   }
+
+  /* Synchronous full build — fallback only (see PERF NOTE above). */
+  function _buildUltraNormalMap() {
+    var SIZE = _ULTRA_SIZE;
+    var cv = document.createElement("canvas");
+    cv.width = cv.height = SIZE;
+    var ctx = cv.getContext("2d");
+    var img = ctx.createImageData(SIZE, SIZE);
+    _ultraFillRows(img.data, 0, SIZE);
+    ctx.putImageData(img, 0, 0);
+    return _finishUltraTexture(cv);
+  }
+
   /* Defer build until first use — saves ~30ms on initial page paint
      for users who never see an ultra cactus (e.g. low-end devices). */
   var _ULTRA_NORMAL = null;
+  var _ultraBake = null;   /* in-progress sliced-bake state, or null */
+
+  function _nowMs() {
+    return (typeof performance !== "undefined" && performance.now)
+      ? performance.now() : Date.now();
+  }
+
+  /* Time-sliced bake: process a handful of scanlines per idle window,
+     bounded by a per-slice millisecond budget, until the full 2K map is
+     done — then upload it once. Callbacks passed while a bake is already
+     running are queued and fired on completion. */
+  function _buildUltraNormalMapAsync(onDone) {
+    if (_ULTRA_NORMAL != null) { if (onDone) onDone(_ULTRA_NORMAL); return; }
+    if (_ultraBake) { if (onDone) _ultraBake.cbs.push(onDone); return; }
+    var SIZE = _ULTRA_SIZE;
+    var cv = document.createElement("canvas");
+    cv.width = cv.height = SIZE;
+    var ctx = cv.getContext("2d");
+    _ultraBake = {
+      cv: cv, ctx: ctx, img: ctx.createImageData(SIZE, SIZE),
+      y: 0, cbs: onDone ? [onDone] : [],
+    };
+    _scheduleUltraSlice();
+  }
+
+  function _finalizeUltraBake() {
+    var st = _ultraBake;
+    if (!st) return;
+    st.ctx.putImageData(st.img, 0, 0);
+    _ULTRA_NORMAL = _finishUltraTexture(st.cv);
+    var cbs = st.cbs;
+    _ultraBake = null;
+    for (var k = 0; k < cbs.length; k++) {
+      try { cbs[k](_ULTRA_NORMAL); } catch (e) { /* ignore */ }
+    }
+  }
+
+  function _ultraSliceStep() {
+    var st = _ultraBake;
+    if (!st) return;
+    var SIZE = _ULTRA_SIZE;
+    var start = _nowMs();
+    /* ~6ms budget/slice keeps us comfortably inside a 60fps frame's
+       headroom; 8-row batches so we re-check the clock frequently. */
+    var BUDGET_MS = 6, ROW_STEP = 8;
+    while (st.y < SIZE) {
+      var y1 = Math.min(st.y + ROW_STEP, SIZE);
+      _ultraFillRows(st.img.data, st.y, y1);
+      st.y = y1;
+      if (_nowMs() - start >= BUDGET_MS) break;
+    }
+    if (st.y >= SIZE) _finalizeUltraBake();
+    else _scheduleUltraSlice();
+  }
+
+  function _scheduleUltraSlice() {
+    if (typeof window !== "undefined" && window.requestIdleCallback) {
+      window.requestIdleCallback(_ultraSliceStep, { timeout: 500 });
+    } else {
+      setTimeout(_ultraSliceStep, 16);
+    }
+  }
+
   function _ultraNormalMap() {
-    if (_ULTRA_NORMAL == null) _ULTRA_NORMAL = _buildUltraNormalMap();
+    if (_ULTRA_NORMAL != null) return _ULTRA_NORMAL;
+    /* Fallback: an ultra cactus needs the map before the sliced bake
+       finished. Complete the remaining rows synchronously. In practice
+       this never triggers — ultra spawns are gated to ~25s (see
+       ULTRA_GRACE_MS), long after the bake that starts at ~14s has
+       finished slicing. */
+    if (_ultraBake) {
+      _ultraFillRows(_ultraBake.img.data, _ultraBake.y, _ULTRA_SIZE);
+      _ultraBake.y = _ULTRA_SIZE;
+      _finalizeUltraBake();
+      return _ULTRA_NORMAL;
+    }
+    _ULTRA_NORMAL = _buildUltraNormalMap();
     return _ULTRA_NORMAL;
   }
-  /* Pre-bake the 2K normal map on the first browser idle window AFTER
-     the page-load animation settles. Without this, the first ultra
-     cactus build would synchronously compute ~67M fbm samples on the
-     main thread (200-500ms on a phone), torpedoing the iri-card color
-     animation. Doing it preemptively in idle time means by the time
-     ULTRA spawns are unlocked (see ULTRA_GRACE_MS), the texture is
-     already on the GPU. The check is wrapped in setTimeout so it can't
-     run before the iri-card has had a chance to mount. */
+  /* Pre-bake the 2K normal map after the page-load animation settles,
+     but do it in time-sliced idle chunks (see _buildUltraNormalMapAsync)
+     so it can't monopolise the main thread. Before slicing, this one-shot
+     bake computed hundreds of millions of Math.sin() samples in a single
+     synchronous pass and froze the entire page for several seconds right
+     around the 10-15s mark. By the time ULTRA spawns are unlocked (see
+     ULTRA_GRACE_MS, ~25s) the sliced bake has long since finished and the
+     texture is already on the GPU. The outer setTimeout keeps it from
+     running before the iri-card has had a chance to mount. */
   if (typeof window !== "undefined") {
     var _bakeUltra = function () {
-      try { _ultraNormalMap(); } catch (e) { /* ignore */ }
+      try { _buildUltraNormalMapAsync(); } catch (e) { /* ignore */ }
     };
     var _scheduleBake = function () {
       if (window.requestIdleCallback) {
