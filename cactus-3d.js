@@ -218,7 +218,7 @@ import * as THREE from "https://cdn.jsdelivr.net/npm/three@0.162.0/build/three.m
     envCtx.fillRect(0, 0, ENV_W, ENV_H);
   }
 
-  function buildEnvFromIri() {
+  function captureEnvFromIri() {
     var theme = currentTheme;
     /* 1) Paint sky/ground fallback first so the env is never black if
           sampling fails. */
@@ -279,14 +279,48 @@ import * as THREE from "https://cdn.jsdelivr.net/npm/three@0.162.0/build/three.m
       envCtx.fillStyle = botFade;
       envCtx.fillRect(0, bandY + bandH - 32, ENV_W, 48);
     }
+    return true;
+  }
 
-    /* 4) Push to PMREM and swap. Dispose previous render-target so we
-          don't leak GPU memory across refreshes. */
+  /* PMREM is the expensive half of an env refresh (~10-40ms). It used
+     to run synchronously inside the rAF loop, which meant the very frame
+     where the first cactus slid into view also paid a PMREM hitch on top
+     of the first real GPU draw — the "lag when the first cactus appears"
+     the user reported. We now run PMREM only in idle windows; the rAF
+     loop just snapshots the iri-card pixels (captureEnvFromIri). */
+  var envPmremPending = false;
+  var envPmremInFlight = false;
+
+  function applyEnvPmrem() {
     envTex.needsUpdate = true;
     var newRT = pmrem.fromEquirectangular(envTex);
     if (currentEnvRT) currentEnvRT.dispose();
     currentEnvRT = newRT;
     scene.environment = newRT.texture;
+  }
+
+  function scheduleEnvPmrem() {
+    envPmremPending = true;
+    if (envPmremInFlight) return;
+    envPmremInFlight = true;
+    var run = function () {
+      try { applyEnvPmrem(); } catch (e) { /* ignore */ }
+      envPmremInFlight = false;
+      if (envPmremPending) {
+        envPmremPending = false;
+        scheduleEnvPmrem();
+      }
+    };
+    if (typeof window !== "undefined" && window.requestIdleCallback) {
+      window.requestIdleCallback(run, { timeout: 2000 });
+    } else {
+      setTimeout(run, 16);
+    }
+  }
+
+  function buildEnvFromIri() {
+    captureEnvFromIri();
+    scheduleEnvPmrem();
   }
 
   /* Initial env build (uses fallback if iri hasn't painted yet).
@@ -323,8 +357,14 @@ import * as THREE from "https://cdn.jsdelivr.net/npm/three@0.162.0/build/three.m
   /* Skip env refreshes entirely during the page-load entrance window
      so the iri-card glitch + cactus slide-in looks perfectly fluid.
      12s lines up with the iri-card glitch finishing at ~8.7s plus
-     enough buffer for the first cacti to drift into view. */
+     enough buffer for the first cacti to drift into view.
+
+     The first periodic refresh is further gated on firstCactusAttachAt
+     (see loop()) so PMREM never collides with the first cactus's
+     entrance frame — that was the remaining source of brief lag. */
   var FIRST_ENV_REFRESH_MS = 12000;
+  var FIRST_CACTUS_ENV_GRACE_MS = 4000;
+  var firstCactusAttachAt = 0;
 
   /* React when the user toggles dark mode. We re-apply the theme
      preset and rebuild the env so the cacti adopt the new palette.
@@ -1289,6 +1329,63 @@ import * as THREE from "https://cdn.jsdelivr.net/npm/three@0.162.0/build/three.m
     }
   }
 
+  /* Off-main-thread bake — the definitive fix for the "lags a little then
+     stops after a while" symptom. The time-sliced main-thread bake above
+     eliminated the hard freeze, but it still nibbled ~6ms out of hundreds
+     of consecutive frames right as the first cactus slid in, which reads
+     as sustained mild jank until the bake finishes. Running the ENTIRE
+     height-field + normal computation inside a Web Worker costs the main
+     thread ZERO time, so there is no stutter at all.
+
+     The worker is assembled from the exact same noise/fill functions used
+     everywhere else (serialised via Function.prototype.toString), so its
+     output is byte-identical to the sync/sliced bakes. It ships only raw
+     math — never THREE. The finished RGBA buffer is transferred back
+     zero-copy and uploaded once via a single cheap putImageData (~1-2ms).
+     If Workers/Blob URLs are unavailable, we fall back to the sliced
+     main-thread bake automatically. */
+  var _ultraWorker = null;
+  function _buildUltraNormalMapWorker(onDone) {
+    if (_ULTRA_NORMAL != null) { if (onDone) onDone(_ULTRA_NORMAL); return true; }
+    if (typeof Worker === "undefined" || typeof Blob === "undefined" ||
+        typeof URL === "undefined" || !URL.createObjectURL) return false;
+    try {
+      var src =
+        "var _ULTRA_SIZE=" + _ULTRA_SIZE + ";" +
+        "var _ULTRA_STRENGTH=" + _ULTRA_STRENGTH + ";" +
+        _h2.toString() + _vn2.toString() + _fbm2.toString() +
+        _ultraHeight.toString() + _ultraFillRows.toString() +
+        "self.onmessage=function(){" +
+        "var d=new Uint8ClampedArray(_ULTRA_SIZE*_ULTRA_SIZE*4);" +
+        "_ultraFillRows(d,0,_ULTRA_SIZE);" +
+        "self.postMessage(d.buffer,[d.buffer]);};";
+      var blob = new Blob([src], { type: "application/javascript" });
+      var url = URL.createObjectURL(blob);
+      var w = new Worker(url);
+      _ultraWorker = w;
+      w.onmessage = function (ev) {
+        try {
+          var d = new Uint8ClampedArray(ev.data);
+          var cv = document.createElement("canvas");
+          cv.width = cv.height = _ULTRA_SIZE;
+          var ctx = cv.getContext("2d");
+          ctx.putImageData(new ImageData(d, _ULTRA_SIZE, _ULTRA_SIZE), 0, 0);
+          if (_ULTRA_NORMAL == null) _ULTRA_NORMAL = _finishUltraTexture(cv);
+          if (onDone) onDone(_ULTRA_NORMAL);
+        } catch (e) { /* ignore */ }
+        w.terminate(); _ultraWorker = null;
+        URL.revokeObjectURL(url);
+      };
+      w.onerror = function () {
+        w.terminate(); _ultraWorker = null; URL.revokeObjectURL(url);
+        /* Worker failed to run — fall back to the sliced main-thread bake. */
+        _buildUltraNormalMapAsync(onDone);
+      };
+      w.postMessage(0);
+      return true;
+    } catch (e) { return false; }
+  }
+
   function _ultraNormalMap() {
     if (_ULTRA_NORMAL != null) return _ULTRA_NORMAL;
     /* Fallback: an ultra cactus needs the map before the sliced bake
@@ -1316,7 +1413,13 @@ import * as THREE from "https://cdn.jsdelivr.net/npm/three@0.162.0/build/three.m
      running before the iri-card has had a chance to mount. */
   if (typeof window !== "undefined") {
     var _bakeUltra = function () {
-      try { _buildUltraNormalMapAsync(); } catch (e) { /* ignore */ }
+      try {
+        /* Prefer the zero-main-thread worker bake; only if the platform
+           can't spin one up do we fall back to the sliced bake. */
+        if (!_buildUltraNormalMapWorker()) _buildUltraNormalMapAsync();
+      } catch (e) {
+        try { _buildUltraNormalMapAsync(); } catch (e2) { /* ignore */ }
+      }
     };
     var _scheduleBake = function () {
       if (window.requestIdleCallback) {
@@ -3701,13 +3804,18 @@ import * as THREE from "https://cdn.jsdelivr.net/npm/three@0.162.0/build/three.m
   function attachOne(rec) {
     if (cacti.length >= MAX_CACTI) {
       /* Slot vanished while we were preparing — dispose so we don't
-         leak GPU memory. */
+         leak GPU memory. Also pull it from the scene in case it was
+         parked there by the shader pre-warm. */
+      scene.remove(rec.mesh);
       rec.mesh.traverse(function (ch) {
         if (ch.geometry) ch.geometry.dispose();
         if (ch.material) ch.material.dispose();
       });
       return;
     }
+    /* Flag so the pre-warm's deferred cleanup won't yank a cactus that
+       has since been attached for real. */
+    rec.mesh.userData._attached = true;
     scene.add(rec.mesh);
 
     /* Pick a depth tier for this cactus and compute the screen-edge
@@ -3780,6 +3888,10 @@ import * as THREE from "https://cdn.jsdelivr.net/npm/three@0.162.0/build/three.m
       tierZ: tier.z,
       zoneMul: tier.zoneMul,
     });
+    if (cacti.length === 1 && !firstCactusAttachAt) {
+      firstCactusAttachAt = (typeof performance !== "undefined")
+        ? performance.now() : Date.now();
+    }
   }
 
   /* Background pump: keep buildQueue topped up so attachOne always has
@@ -3790,13 +3902,86 @@ import * as THREE from "https://cdn.jsdelivr.net/npm/three@0.162.0/build/three.m
     ? function (fn) { window.requestIdleCallback(fn, { timeout: 1500 }); }
     : function (fn) { setTimeout(fn, 32); };
 
+  /* Pre-compile a prepared cactus's shader program BEFORE it is ever
+     attached, so the frame where it first appears doesn't pay a one-off
+     20-80ms shader-compile stutter (a MeshPhysicalMaterial with env map +
+     vertex colors + normal map + sheen + clearcoat is a heavy program).
+     This is the OTHER half of the "lag when the first cactus appears".
+
+     We park the mesh far beyond the camera's far plane (z = -9999) and
+     add it to the real scene: that keeps it frustum-culled — it is never
+     drawn — while still letting compileAsync traverse it and build its
+     program against the scene's real lights + environment (so the program
+     matches exactly what it needs once attached). compileAsync uses the
+     KHR_parallel_shader_compile path where available, keeping the compile
+     itself off the critical frame too. If the cactus gets attached before
+     the compile resolves, we leave it in the scene (attachOne flags it);
+     otherwise we pull the parked copy back out. */
+  function _prewarmShader(mesh) {
+    if (!mesh || !mesh.userData || mesh.userData._prewarmed) return;
+    if (typeof ren.compileAsync !== "function") return;
+    mesh.userData._prewarmed = true;
+    mesh.position.set(0, 0, -9999);   /* beyond far=50 → frustum-culled */
+    scene.add(mesh);
+    var _cleanup = function () {
+      if (!mesh.userData._attached && mesh.parent === scene) {
+        scene.remove(mesh);
+      }
+    };
+    try {
+      ren.compileAsync(scene, cam).then(_cleanup, _cleanup);
+    } catch (e) { _cleanup(); }
+  }
+
+  /* compileAsync builds shader programs but never issues a real draw call,
+     so the GPU still uploads geometry buffers + texture bindings on the
+     first visible frame — a 30-60ms hitch right when the cactus slides
+     into view. We pay that cost once here, in the same idle window where
+     the cactus was built, by rendering a single 1×1 frame with the mesh
+     scaled to near-zero (invisible). By attach time the GPU pipeline is
+     already warm and the entrance is smooth. */
+  function _gpuPrewarm(mesh) {
+    if (!mesh || mesh.userData._gpuPrewarmed) return;
+    mesh.userData._gpuPrewarmed = true;
+
+    var savedPos = mesh.position.clone();
+    var savedQuat = mesh.quaternion.clone();
+    var savedScale = mesh.scale.clone();
+    var wasAttached = !!mesh.userData._attached;
+    var wasInScene = mesh.parent === scene;
+
+    mesh.position.set(0, 0, cam.position.z - 1);
+    mesh.quaternion.identity();
+    mesh.scale.multiplyScalar(0.0001);
+    if (!wasInScene) scene.add(mesh);
+
+    var savedPR = ren.getPixelRatio();
+    var rw = cvs.clientWidth || _lw || 1;
+    var rh = cvs.clientHeight || _lh || 1;
+    ren.setPixelRatio(1);
+    ren.setSize(1, 1, false);
+    ren.render(scene, cam);
+    ren.setPixelRatio(savedPR);
+    ren.setSize(rw, rh, false);
+    _lw = rw; _lh = rh;
+
+    mesh.position.copy(savedPos);
+    mesh.quaternion.copy(savedQuat);
+    mesh.scale.copy(savedScale);
+    if (!wasInScene && !wasAttached) scene.remove(mesh);
+  }
+
   function pumpBuildQueue() {
     if (inflightBuild) return;
     if (buildQueue.length >= POOL_TARGET) return;
     inflightBuild = true;
     _idleCb(function () {
       try {
-        prepareOne(function (rec) { buildQueue.push(rec); });
+        prepareOne(function (rec) {
+          buildQueue.push(rec);
+          _prewarmShader(rec.mesh);
+          _gpuPrewarm(rec.mesh);
+        });
       } catch (e) { /* swallow — bad build, just skip this round */ }
       inflightBuild = false;
       /* Chain the next build, but only after another idle window so we
@@ -3960,6 +4145,8 @@ import * as THREE from "https://cdn.jsdelivr.net/npm/three@0.162.0/build/three.m
       for (var qi = buildQueue.length - 1; qi >= 0; qi--) {
         var qrec = buildQueue[qi];
         if (qrec.mesh && qrec.mesh.userData && qrec.mesh.userData.isUltra) {
+          /* Pull it from the scene in case the shader pre-warm parked it. */
+          scene.remove(qrec.mesh);
           qrec.mesh.traverse(function (ch) {
             if (ch.geometry) ch.geometry.dispose();
             if (ch.material) ch.material.dispose();
@@ -3982,17 +4169,25 @@ import * as THREE from "https://cdn.jsdelivr.net/npm/three@0.162.0/build/three.m
     resize();
 
     /* Refresh the IBL from the live iridescent backdrop on a slow cadence.
-       Done inside rAF so the WebGL iri-card front buffer is still readable
-       at the moment we drawImage() it.
+       Pixel capture runs inside rAF so the WebGL iri-card front buffer is
+       still readable at the moment we drawImage() it. The PMREM half is
+       deferred to an idle window (scheduleEnvPmrem) so it never blocks the
+       frame that renders the cacti.
 
-       PMREM is expensive (compiles + draws to a render target) so we skip
-       this entirely for the first 12 seconds of life so the page-load
-       color animation stays buttery, and we space refreshes out further
-       (~1.5s -> 3s) on devices that have already shown they can't hit
-       the ultra frame budget. */
+       We skip refreshes entirely for the first 12s of life so the page-load
+       color animation stays buttery. After that, the FIRST refresh waits an
+       extra 4s from first-cactus attach so PMREM doesn't collide with the
+       entrance frame. Subsequent refreshes space out further (~1.5s -> 3s)
+       on devices that have already shown they can't hit the ultra frame
+       budget. */
     var envInterval = ULTRA_ENABLED ? ENV_REFRESH_MS : ENV_REFRESH_MS * 2;
-    if (time > FIRST_ENV_REFRESH_MS && time - lastEnvRefresh > envInterval) {
-      buildEnvFromIri();
+    var envGateMs = FIRST_ENV_REFRESH_MS;
+    if (firstCactusAttachAt > 0) {
+      envGateMs = Math.max(envGateMs, firstCactusAttachAt + FIRST_CACTUS_ENV_GRACE_MS);
+    }
+    if (time > envGateMs && time - lastEnvRefresh > envInterval) {
+      captureEnvFromIri();
+      scheduleEnvPmrem();
       lastEnvRefresh = time;
     }
 
@@ -4310,11 +4505,14 @@ import * as THREE from "https://cdn.jsdelivr.net/npm/three@0.162.0/build/three.m
        t≈ 8000 ms  → page-side script triggers card-glitching →
                      fades in the iridescent gradient.
        t≈ 8700 ms  → iri-card opacity = 1, glitch effect cleared.
-       t=12000 ms  → env-map refreshes are unlocked (see loop()).
+       t=12000 ms  → env pixel-capture refreshes unlock (PMREM half runs
+                     in idle windows, never inside rAF).
        t=13000 ms  → first prebuilt cactus is attached to the scene
-                     and starts sliding into view. Subsequent spawns
-                     happen on the 7-12s schedule and pull from the
-                     prebuilt pool whenever possible.
+                     and starts sliding into view. GPU buffers were
+                     pre-warmed during the idle build at t≈0.
+       t≈17000 ms  → first PMREM refresh (4s grace after first attach).
+                     Subsequent spawns happen on the 7-12s schedule and
+                     pull from the prebuilt pool whenever possible.
        t≈25000 ms  → ULTRA species are unlocked (the 2K normal map
                      is already pre-baked from t=14s so the first
                      ultra spawn is now cheap).
